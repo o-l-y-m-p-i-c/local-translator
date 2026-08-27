@@ -1,0 +1,86 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model ShopSettings {
+  shop                  String   @id
+  encryptedGeminiApiKey String?
+  geminiModel           String   @default("gemini-2.5-flash")
+  batchSize             Int      @default(30)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model TranslationWorkspace {
+  id             String           @id @default(cuid())
+  shop           String
+  themeId        String
+  themeName      String
+  sourceFilename String
+  sourceLocale   String
+  targetLocale   String
+  sourceSnapshot String
+  targetSnapshot String
+  statusSnapshot String
+  lastSyncedAt   DateTime
+  lastUpdatedAt  DateTime         @updatedAt
+  createdAt      DateTime         @default(now())
+  jobs           TranslationJob[]
+
+  @@unique([shop, themeId, sourceFilename, targetLocale])
+  @@index([shop, themeId])
+}
+
+model TranslationJob {
+  id                   String                @id @default(cuid())
+  workspaceId          String
+  workspace            TranslationWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  activeKey            String?               @unique
+  pendingKeys          Json
+  status               String                @default("pending")
+  totalItems           Int
+  completedItems       Int                   @default(0)
+  promptTokenCount     Int                   @default(0)
+  candidatesTokenCount Int                   @default(0)
+  thoughtsTokenCount   Int                   @default(0)
+  totalTokenCount      Int                   @default(0)
+  model                String
+  error                String?
+  processingStartedAt  DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  completedAt          DateTime?
+
+  @@index([workspaceId, status])
+}
