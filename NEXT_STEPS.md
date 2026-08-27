@@ -33,13 +33,13 @@ npm install
 npm run setup
 ```
 
-На Netlify используйте pooled PostgreSQL URL. Можно задать `DATABASE_URL` напрямую либо создать Netlify Database и использовать предоставленный `NETLIFY_DB_URL`. Приложение поддерживает оба имени, а Netlify build автоматически подставляет `NETLIFY_DB_URL` в Prisma migration process. Переменная должна иметь scopes **Builds** и **Functions**.
+На Netlify задайте pooled Neon URL с `-pooler` как `DATABASE_URL` для Builds и Functions. Direct Neon URL без `-pooler` задайте как `DIRECT_URL` только для Builds и Prisma migrations. Полная инструкция приведена в `NEON_SETUP.md`.
 
 `TranslationWorkspace` хранит snapshots/statuses по shop/theme/source/target. `ShopSettings` хранит конфигурацию shop. `TranslationJob` связан с workspace через cascade delete и хранит pending keys, progress, status/error, модель и token counters.
 
 Start создаёт job и сразу завершает HTTP request. Embedded client обрабатывает по одному ограниченному batch и автоматически запрашивает следующий. После каждого batch переводы и прогресс сохраняются транзакционно. In-process background work не запускается. Ошибки 429/5xx переводят job в paused; Continue повторяет только незавершённый batch. Остальные ошибки имеют failed status и Retry. Уникальный active key предотвращает два незавершённых job для одного workspace, а shop-scoped запросы предотвращают cross-shop access.
 
-Для production включите TLS, pooling, backup, point-in-time recovery, monitoring и отдельную database branch/URL для Deploy Previews. Не подключайте preview builds к production database.
+Для production используйте Neon TLS и pooled endpoint, настройте backup, monitoring и отдельную Neon branch для Deploy Previews. Не подключайте preview builds к production branch.
 
 ## 4. Проверка перед deployment
 
@@ -57,7 +57,7 @@ npm run build
 
 1. Отправьте репозиторий в GitHub/GitLab и создайте в Netlify новый site из этого репозитория.
 2. Netlify прочитает `netlify.toml`: build command уже выполняет Prisma generate, migrations и React Router build; publish directory — `build/client`; SSR запускается в Node Serverless Functions.
-3. В **Project configuration → Environment variables** задайте `SHOPIFY_API_KEY`, secret `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES`, `DATABASE_URL` или `NETLIFY_DB_URL`, `NODE_ENV=production`. Для database URL включите scopes Builds и Functions. Gemini secrets задаются продавцами только через Settings.
+3. В **Project configuration → Environment variables** задайте `SHOPIFY_API_KEY`, secret `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES`, pooled Neon `DATABASE_URL` и direct Neon `DIRECT_URL`. Для `DATABASE_URL` включите Builds и Functions, для `DIRECT_URL` — Builds. Gemini secrets задаются продавцами только через Settings.
 4. `SHOPIFY_APP_URL` должен точно совпадать с production origin вида `https://<site>.netlify.app`, без path. Не используйте deploy-preview URL как production app URL.
 5. После первого deploy добавьте в связанную Shopify app configuration `application_url` с этим origin и redirect URL `<origin>/auth/callback`, затем выполните `shopify app deploy`.
 6. Переустановите приложение, если изменились scopes. Проверьте OAuth, Settings, theme reads/writes и webhooks на development store.

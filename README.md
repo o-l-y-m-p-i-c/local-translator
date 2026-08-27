@@ -60,10 +60,10 @@ Create a Netlify site from this repository and configure these values in **Proje
 - `SHOPIFY_API_SECRET` as a secret
 - `SHOPIFY_APP_URL` with the production `https://<site>.netlify.app` origin
 - `SCOPES=read_themes,write_themes,read_locales`
-- `DATABASE_URL` with a pooled PostgreSQL connection string, or provision Netlify Database and use its `NETLIFY_DB_URL`
-- `NODE_ENV=production`
+- `DATABASE_URL` with the pooled Neon URL containing `-pooler`
+- `DIRECT_URL` with the direct Neon URL used by Prisma migrations
 
-The Netlify build runs Prisma generation, `prisma migrate deploy`, and the React Router build. The database variable must be available to both Builds and Functions. Do not connect Deploy Previews to the production database; use Netlify Database branches or context-specific database variables.
+The Netlify build validates environment variables, runs Prisma generation, applies migrations through `DIRECT_URL`, and builds React Router. `DATABASE_URL` must be available to Builds and Functions; `DIRECT_URL` only needs the Builds scope. Do not connect Deploy Previews to the production Neon branch; use a separate Neon branch and context-specific URLs.
 
 After the first production deployment, set the same origin as `application_url` and `<origin>/auth/callback` as the redirect URL in the linked Shopify app configuration, run `shopify app deploy`, and reinstall the app if scopes changed. Gemini keys remain shop-owned encrypted settings entered in the app and are not Netlify variables.
 
@@ -72,7 +72,7 @@ After the first production deployment, set the same origin as `application_url` 
 - Back up the database and theme before bulk publishing.
 - Theme writes require merchant approval for `write_themes` and can be subject to Shopify review.
 - Gemini validation fails closed if protected tokens change or output keys are omitted.
-- PostgreSQL is required. Use a serverless pooled connection or Prisma Accelerate to avoid exhausting connections under function concurrency.
+- PostgreSQL is provided by Neon. Runtime queries use the pooled URL through `@prisma/adapter-neon`; migrations use the direct URL.
 - Uninstall and shop-redact cleanup delete settings and workspaces; workspace cascade deletion removes jobs.
 
-Detailed setup, deployment, and distribution guidance is in [NEXT_STEPS.md](./NEXT_STEPS.md).
+Detailed setup, deployment, and distribution guidance is in [NEXT_STEPS.md](./NEXT_STEPS.md). Follow [NEON_SETUP.md](./NEON_SETUP.md) for database creation, pooled/direct URLs, Netlify variables, migrations, and troubleshooting.

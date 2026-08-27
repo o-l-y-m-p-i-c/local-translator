@@ -1,3 +1,4 @@
+import { PrismaNeon } from "@prisma/adapter-neon";
 import { PrismaClient } from "@prisma/client";
 
 declare global {
@@ -5,10 +6,14 @@ declare global {
   var prismaGlobal: PrismaClient;
 }
 
-const databaseUrl = process.env.DATABASE_URL || process.env.NETLIFY_DB_URL;
-const createPrismaClient = () => new PrismaClient(
-  databaseUrl ? { datasourceUrl: databaseUrl } : undefined,
-);
+const createPrismaClient = () => {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is not configured");
+  }
+  const adapter = new PrismaNeon({ connectionString });
+  return new PrismaClient({ adapter });
+};
 
 if (process.env.NODE_ENV !== "production") {
   if (!global.prismaGlobal) {
