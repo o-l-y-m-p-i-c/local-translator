@@ -1,1 +1,13 @@
 node_modules/
+build/
+.netlify/
+.react-router/
+.cache/
+.env
+.env.*
+!.env.example
+.DS_Store
+prisma/dev.sqlite
+prisma/dev.sqlite-journal
+.shopify/
+.shopify.lock

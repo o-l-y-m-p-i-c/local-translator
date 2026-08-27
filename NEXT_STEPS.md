@@ -26,26 +26,20 @@ Gemini key и model больше не являются runtime env-переме�
 
 ## 3. База данных и durable jobs
 
-Локально используется SQLite:
+Приложение настроено на PostgreSQL. Создайте локальную или облачную БД, скопируйте `.env.example` в `.env`, заполните `DATABASE_URL`, затем выполните:
 
 ```bash
 npm install
 npm run setup
 ```
 
+На Netlify используйте pooled PostgreSQL URL. Можно задать `DATABASE_URL` напрямую либо создать Netlify Database и использовать предоставленный `NETLIFY_DB_URL`. Приложение поддерживает оба имени, а Netlify build автоматически подставляет `NETLIFY_DB_URL` в Prisma migration process. Переменная должна иметь scopes **Builds** и **Functions**.
+
 `TranslationWorkspace` хранит snapshots/statuses по shop/theme/source/target. `ShopSettings` хранит конфигурацию shop. `TranslationJob` связан с workspace через cascade delete и хранит pending keys, progress, status/error, модель и token counters.
 
 Start создаёт job и сразу завершает HTTP request. Embedded client обрабатывает по одному ограниченному batch и автоматически запрашивает следующий. После каждого batch переводы и прогресс сохраняются транзакционно. In-process background work не запускается. Ошибки 429/5xx переводят job в paused; Continue повторяет только незавершённый batch. Остальные ошибки имеют failed status и Retry. Уникальный active key предотвращает два незавершённых job для одного workspace, а shop-scoped запросы предотвращают cross-shop access.
 
-Для production рекомендуется managed PostgreSQL/MySQL:
-
-1. Создайте БД с TLS, backup и point-in-time recovery.
-2. Измените Prisma datasource и задайте `DATABASE_URL`.
-3. Адаптируйте и протестируйте migration SQL для выбранной СУБД.
-4. Запускайте `prisma generate && prisma migrate deploy` один раз до старта новой версии.
-5. Настройте retention, monitoring и восстановление из backup.
-
-Не используйте ephemeral SQLite при нескольких репликах или без persistent volume.
+Для production включите TLS, pooling, backup, point-in-time recovery, monitoring и отдельную database branch/URL для Deploy Previews. Не подключайте preview builds к production database.
 
 ## 4. Проверка перед deployment
 
@@ -59,15 +53,16 @@ npm run build
 
 На копии темы проверьте nested keys, пустые строки, Liquid, placeholders, HTML, Unicode, большие файлы, storefront/schema filenames и sync после изменения source. Проверьте Start/Continue/Retry, восстановление после перезапуска, 429/5xx, uninstall/reinstall, shop redact и невозможность доступа другого shop.
 
-## 5. Deployment
+## 5. Deployment на Netlify
 
-1. Выберите HTTPS-хостинг с постоянным URL и persistent database.
-2. Задайте `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES`, `DATABASE_URL`, `NODE_ENV=production`. Gemini secrets задаются продавцами только через Settings.
-3. Не встраивайте secrets в image. Ограничьте IAM и подготовьте процесс повторного ввода Gemini keys при rotation Shopify secret.
-4. Выполните build и migration deploy до старта сервера.
-5. Обновите app/redirect URLs и выполните Shopify deploy.
-6. Добавьте health checks, логи без credentials и текстов переводов, error tracking, uptime alerts и метрики Gemini latency/rate limits.
-7. Используйте отдельные приложения, БД и ключи для staging/production.
+1. Отправьте репозиторий в GitHub/GitLab и создайте в Netlify новый site из этого репозитория.
+2. Netlify прочитает `netlify.toml`: build command уже выполняет Prisma generate, migrations и React Router build; publish directory — `build/client`; SSR запускается в Node Serverless Functions.
+3. В **Project configuration → Environment variables** задайте `SHOPIFY_API_KEY`, secret `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES`, `DATABASE_URL` или `NETLIFY_DB_URL`, `NODE_ENV=production`. Для database URL включите scopes Builds и Functions. Gemini secrets задаются продавцами только через Settings.
+4. `SHOPIFY_APP_URL` должен точно совпадать с production origin вида `https://<site>.netlify.app`, без path. Не используйте deploy-preview URL как production app URL.
+5. После первого deploy добавьте в связанную Shopify app configuration `application_url` с этим origin и redirect URL `<origin>/auth/callback`, затем выполните `shopify app deploy`.
+6. Переустановите приложение, если изменились scopes. Проверьте OAuth, Settings, theme reads/writes и webhooks на development store.
+7. Отметьте Shopify/database credentials как secrets, ограничьте scopes, настройте rotation, health checks, error tracking и alerts. После rotation Shopify secret сохранённые Gemini keys потребуется ввести повторно.
+8. Используйте отдельные Shopify apps и database branches/URLs для deploy previews, staging и production.
 
 ## 6. Distribution и дальнейшая работа
 

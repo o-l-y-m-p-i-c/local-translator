@@ -5,12 +5,17 @@ declare global {
   var prismaGlobal: PrismaClient;
 }
 
+const databaseUrl = process.env.DATABASE_URL || process.env.NETLIFY_DB_URL;
+const createPrismaClient = () => new PrismaClient(
+  databaseUrl ? { datasourceUrl: databaseUrl } : undefined,
+);
+
 if (process.env.NODE_ENV !== "production") {
   if (!global.prismaGlobal) {
-    global.prismaGlobal = new PrismaClient();
+    global.prismaGlobal = createPrismaClient();
   }
 }
 
-const prisma = global.prismaGlobal ?? new PrismaClient();
+const prisma = global.prismaGlobal ?? createPrismaClient();
 
 export default prisma;

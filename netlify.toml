@@ -1,0 +1,11 @@
+[build]
+command = "export DATABASE_URL=\"${DATABASE_URL:-$NETLIFY_DB_URL}\" && npm run netlify:build"
+publish = "build/client"
+
+[build.environment]
+NODE_VERSION = "22.14.0"
+
+[functions]
+node_bundler = "esbuild"
+external_node_modules = ["@prisma/client"]
+included_files = ["node_modules/.prisma/client/**"]

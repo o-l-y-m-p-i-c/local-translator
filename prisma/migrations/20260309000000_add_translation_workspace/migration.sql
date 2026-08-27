@@ -9,9 +9,9 @@ CREATE TABLE "TranslationWorkspace" (
     "sourceSnapshot" TEXT NOT NULL,
     "targetSnapshot" TEXT NOT NULL,
     "statusSnapshot" TEXT NOT NULL,
-    "lastSyncedAt" DATETIME NOT NULL,
-    "lastUpdatedAt" DATETIME NOT NULL,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "lastSyncedAt" TIMESTAMP(3) NOT NULL,
+    "lastUpdatedAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE UNIQUE INDEX "TranslationWorkspace_shop_themeId_sourceFilename_targetLocale_key" ON "TranslationWorkspace"("shop", "themeId", "sourceFilename", "targetLocale");

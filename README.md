@@ -15,7 +15,7 @@ Production-oriented Shopify app for translating theme locale JSON inside an auth
 
 ## Local setup
 
-Requirements: Node.js matching `package.json`, Shopify CLI, a Shopify Partner account, and a development store.
+Requirements: Node.js matching `package.json`, Shopify CLI, PostgreSQL, a Shopify Partner account, and a development store.
 
 ```bash
 cp .env.example .env
@@ -50,12 +50,29 @@ Starting bulk translation only creates a database job. The authenticated client 
 
 The app uses Gemini `models.countTokens` when testing configuration and records generation usage from `response.usageMetadata`. Google quotas vary by project, model, billing tier, and may change; review the current Gemini documentation for requests per minute (RPM), tokens per minute (TPM), and requests per day (RPD). Set batch sizes and retry timing below the applicable limits and monitor quota and billing dashboards.
 
+## Netlify deployment
+
+The project uses the official Netlify React Router adapter and deploys SSR to Node Serverless Functions. `netlify.toml` sets Node 22, the build command, the `build/client` publish directory, and Prisma function bundling.
+
+Create a Netlify site from this repository and configure these values in **Project configuration → Environment variables**:
+
+- `SHOPIFY_API_KEY`
+- `SHOPIFY_API_SECRET` as a secret
+- `SHOPIFY_APP_URL` with the production `https://<site>.netlify.app` origin
+- `SCOPES=read_themes,write_themes,read_locales`
+- `DATABASE_URL` with a pooled PostgreSQL connection string, or provision Netlify Database and use its `NETLIFY_DB_URL`
+- `NODE_ENV=production`
+
+The Netlify build runs Prisma generation, `prisma migrate deploy`, and the React Router build. The database variable must be available to both Builds and Functions. Do not connect Deploy Previews to the production database; use Netlify Database branches or context-specific database variables.
+
+After the first production deployment, set the same origin as `application_url` and `<origin>/auth/callback` as the redirect URL in the linked Shopify app configuration, run `shopify app deploy`, and reinstall the app if scopes changed. Gemini keys remain shop-owned encrypted settings entered in the app and are not Netlify variables.
+
 ## Operational notes
 
 - Back up the database and theme before bulk publishing.
 - Theme writes require merchant approval for `write_themes` and can be subject to Shopify review.
 - Gemini validation fails closed if protected tokens change or output keys are omitted.
-- SQLite is suitable for local development and one persistent instance. Use managed PostgreSQL or MySQL, and adapt/test migrations, before horizontal scaling.
+- PostgreSQL is required. Use a serverless pooled connection or Prisma Accelerate to avoid exhausting connections under function concurrency.
 - Uninstall and shop-redact cleanup delete settings and workspaces; workspace cascade deletion removes jobs.
 
 Detailed setup, deployment, and distribution guidance is in [NEXT_STEPS.md](./NEXT_STEPS.md).

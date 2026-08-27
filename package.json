@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "build": "react-router build",
+    "netlify:build": "npm run setup && npm run build",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
@@ -42,6 +43,7 @@
     "vite-tsconfig-paths": "^6.0.4"
   },
   "devDependencies": {
+    "@netlify/vite-plugin-react-router": "^3.1.1",
     "@shopify/api-codegen-preset": "^2.0.0",
     "@shopify/polaris-types": "1.0.1",
     "@types/eslint": "^9.6.1",
