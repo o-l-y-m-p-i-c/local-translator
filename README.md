@@ -61,9 +61,9 @@ Create a Netlify site from this repository and configure these values in **Proje
 - `SHOPIFY_APP_URL` with the production `https://<site>.netlify.app` origin
 - `SCOPES=read_themes,write_themes,read_locales`
 - `DATABASE_URL` with the pooled Neon URL containing `-pooler`
-- `DIRECT_URL` with the direct Neon URL used by Prisma migrations
+- `DATABASE_URL_UNPOOLED` with the direct Neon URL used by Prisma migrations
 
-The Netlify build validates environment variables, runs Prisma generation, applies migrations through `DIRECT_URL`, and builds React Router. `DATABASE_URL` must be available to Builds and Functions; `DIRECT_URL` only needs the Builds scope. Do not connect Deploy Previews to the production Neon branch; use a separate Neon branch and context-specific URLs.
+The Netlify build validates environment variables, runs Prisma generation, applies migrations through `DATABASE_URL_UNPOOLED`, and builds React Router. `DATABASE_URL` must be available to Builds and Functions; `DATABASE_URL_UNPOOLED` only needs the Builds scope. Do not connect Deploy Previews to the production Neon branch; use a separate Neon branch and context-specific URLs.
 
 After the first production deployment, set the same origin as `application_url` and `<origin>/auth/callback` as the redirect URL in the linked Shopify app configuration, run `shopify app deploy`, and reinstall the app if scopes changed. Gemini keys remain shop-owned encrypted settings entered in the app and are not Netlify variables.
 

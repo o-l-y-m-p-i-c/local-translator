@@ -1,6 +1,7 @@
 node_modules/
 build/
 .netlify/
+.neon
 .react-router/
 .cache/
 .env
@@ -11,3 +12,4 @@ prisma/dev.sqlite
 prisma/dev.sqlite-journal
 .shopify/
 .shopify.lock
+.neon

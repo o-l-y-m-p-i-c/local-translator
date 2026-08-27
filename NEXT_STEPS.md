@@ -33,7 +33,7 @@ npm install
 npm run setup
 ```
 
-На Netlify задайте pooled Neon URL с `-pooler` как `DATABASE_URL` для Builds и Functions. Direct Neon URL без `-pooler` задайте как `DIRECT_URL` только для Builds и Prisma migrations. Полная инструкция приведена в `NEON_SETUP.md`.
+На Netlify задайте pooled Neon URL с `-pooler` как `DATABASE_URL` для Builds и Functions. Direct Neon URL без `-pooler` задайте как `DATABASE_URL_UNPOOLED` только для Builds и Prisma migrations. Полная инструкция приведена в `NEON_SETUP.md`.
 
 `TranslationWorkspace` хранит snapshots/statuses по shop/theme/source/target. `ShopSettings` хранит конфигурацию shop. `TranslationJob` связан с workspace через cascade delete и хранит pending keys, progress, status/error, модель и token counters.
 
@@ -57,7 +57,7 @@ npm run build
 
 1. Отправьте репозиторий в GitHub/GitLab и создайте в Netlify новый site из этого репозитория.
 2. Netlify прочитает `netlify.toml`: build command уже выполняет Prisma generate, migrations и React Router build; publish directory — `build/client`; SSR запускается в Node Serverless Functions.
-3. В **Project configuration → Environment variables** задайте `SHOPIFY_API_KEY`, secret `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES`, pooled Neon `DATABASE_URL` и direct Neon `DIRECT_URL`. Для `DATABASE_URL` включите Builds и Functions, для `DIRECT_URL` — Builds. Gemini secrets задаются продавцами только через Settings.
+3. В **Project configuration → Environment variables** задайте `SHOPIFY_API_KEY`, secret `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES`, pooled Neon `DATABASE_URL` и direct Neon `DATABASE_URL_UNPOOLED`. Для `DATABASE_URL` включите Builds и Functions, для `DATABASE_URL_UNPOOLED` — Builds. Gemini secrets задаются продавцами только через Settings.
 4. `SHOPIFY_APP_URL` должен точно совпадать с production origin вида `https://<site>.netlify.app`, без path. Не используйте deploy-preview URL как production app URL.
 5. После первого deploy добавьте в связанную Shopify app configuration `application_url` с этим origin и redirect URL `<origin>/auth/callback`, затем выполните `shopify app deploy`.
 6. Переустановите приложение, если изменились scopes. Проверьте OAuth, Settings, theme reads/writes и webhooks на development store.

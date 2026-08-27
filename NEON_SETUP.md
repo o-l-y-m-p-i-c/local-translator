@@ -1,11 +1,25 @@
 # Настройка Neon PostgreSQL
 
+## Текущее подключение
+
+Workspace связан с organization `Nik`, project `shopify-translator` и branch `production`. Neon CLI использует профиль `shopify-translator`, credential хранится в системном keyring. MCP server `Neon` установлен глобально. Конфигурация `neon.ts` объявляет только используемый приложением Postgres; Neon Auth, Data API, Object Storage, Functions и AI Gateway отключены или не объявлены.
+
+Для CLI-команд используйте:
+
+```bash
+neon --profile shopify-translator status
+neon --profile shopify-translator branches list
+neon --profile shopify-translator config plan
+```
+
+Netlify site связан с `https://shopify-locale-translator.netlify.app`. Database secrets установлены только для production context.
+
 ## 1. Создание бесплатной базы
 
 1. Зарегистрируйтесь в [Neon](https://console.neon.tech/).
 2. Создайте новый project.
 3. Выберите регион, ближайший к региону Netlify Functions.
-4. Оставьте основную branch `main`.
+4. Используйте default branch; в текущем проекте она называется `production`.
 5. Создайте или выберите database `neondb` и отдельную application role.
 
 Бесплатного тарифа достаточно для разработки и небольшого количества магазинов. Для публичного production-приложения заранее проверьте актуальные лимиты, backups и требования SLA.
@@ -32,7 +46,7 @@ postgresql://USER:PASSWORD@ep-example-pooler.REGION.aws.neon.tech/neondb?sslmode
 postgresql://USER:PASSWORD@ep-example.REGION.aws.neon.tech/neondb?sslmode=require&channel_binding=require
 ```
 
-Это значение используется как `DIRECT_URL` только во время Prisma migrations.
+Это значение используется как `DATABASE_URL_UNPOOLED` только во время Prisma migrations.
 
 Не добавляйте connection strings в Git, `netlify.toml`, README, screenshots или Shopify settings.
 
@@ -43,15 +57,15 @@ postgresql://USER:PASSWORD@ep-example.REGION.aws.neon.tech/neondb?sslmode=requir
 | Переменная | Значение | Scopes |
 | --- | --- | --- |
 | `DATABASE_URL` | Pooled Neon URL с `-pooler` | Builds, Functions |
-| `DIRECT_URL` | Direct Neon URL без `-pooler` | Builds |
+| `DATABASE_URL_UNPOOLED` | Direct Neon URL без `-pooler` | Builds |
 | `SHOPIFY_API_KEY` | Shopify client ID | Builds, Functions |
 | `SHOPIFY_API_SECRET` | Shopify client secret | Builds, Functions |
 | `SHOPIFY_APP_URL` | `https://YOUR-SITE.netlify.app` | Builds, Functions |
 | `SCOPES` | `read_themes,write_themes,read_locales` | Builds, Functions |
 
-Отметьте `DATABASE_URL`, `DIRECT_URL` и `SHOPIFY_API_SECRET` как secret values. `NODE_ENV=production` и Node.js version уже заданы в `netlify.toml`.
+Отметьте `DATABASE_URL`, `DATABASE_URL_UNPOOLED` и `SHOPIFY_API_SECRET` как secret values. `NODE_ENV=production` и Node.js version уже заданы в `netlify.toml`.
 
-Для Deploy Previews используйте отдельную Neon branch и context-specific `DATABASE_URL`/`DIRECT_URL`. Не подключайте preview deploy к production branch.
+Для Deploy Previews используйте отдельную Neon branch и context-specific `DATABASE_URL`/`DATABASE_URL_UNPOOLED`. Не подключайте preview deploy к production branch.
 
 ## 4. Первый deployment
 
@@ -64,7 +78,7 @@ prisma migrate deploy
 react-router build
 ```
 
-`validate:netlify` проверяет наличие переменных, HTTPS app URL, pooled/direct Neon hostnames и `sslmode=require`. Миграции используют `DIRECT_URL`, приложение во время запросов использует `DATABASE_URL` через `@prisma/adapter-neon`.
+`validate:netlify` проверяет наличие переменных, HTTPS app URL, pooled/direct Neon hostnames и `sslmode=require`. Миграции используют `DATABASE_URL_UNPOOLED`, приложение во время запросов использует `DATABASE_URL` через `@prisma/adapter-neon`.
 
 После успешного deploy откройте Neon SQL Editor и убедитесь, что появились таблицы `Session`, `ShopSettings`, `TranslationWorkspace`, `TranslationJob` и `_prisma_migrations`.
 
@@ -122,7 +136,7 @@ npx prisma migrate status
 npx prisma studio
 ```
 
-Если `prisma migrate status` работает, но приложение не подключается, проверьте, что `DATABASE_URL` содержит `-pooler`. Если migrations завершаются ошибкой PgBouncer или prepared statements, проверьте, что `DIRECT_URL` не содержит `-pooler`.
+Если `prisma migrate status` работает, но приложение не подключается, проверьте, что `DATABASE_URL` содержит `-pooler`. Если migrations завершаются ошибкой PgBouncer или prepared statements, проверьте, что `DATABASE_URL_UNPOOLED` не содержит `-pooler`.
 
 При первом запросе после периода бездействия Neon может запускать compute несколько секунд. Это нормальный cold start бесплатного тарифа.
 

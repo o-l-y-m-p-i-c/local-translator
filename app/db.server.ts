@@ -1,5 +1,7 @@
+import { parseEnv } from "@neon/env";
 import { PrismaNeon } from "@prisma/adapter-neon";
 import { PrismaClient } from "@prisma/client";
+import neonConfig from "../neon";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -7,11 +9,8 @@ declare global {
 }
 
 const createPrismaClient = () => {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("DATABASE_URL is not configured");
-  }
-  const adapter = new PrismaNeon({ connectionString });
+  const { postgres } = parseEnv(neonConfig, ["DATABASE_URL"]);
+  const adapter = new PrismaNeon({ connectionString: postgres.databaseUrl });
   return new PrismaClient({ adapter });
 };
 

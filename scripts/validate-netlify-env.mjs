@@ -4,7 +4,7 @@ const required = [
   "SHOPIFY_APP_URL",
   "SCOPES",
   "DATABASE_URL",
-  "DIRECT_URL",
+  "DATABASE_URL_UNPOOLED",
 ];
 
 const missing = required.filter((name) => !process.env[name]?.trim());
@@ -18,20 +18,20 @@ if (appUrl.protocol !== "https:" || appUrl.pathname !== "/") {
 }
 
 const pooledUrl = new URL(process.env.DATABASE_URL);
-const directUrl = new URL(process.env.DIRECT_URL);
+const directUrl = new URL(process.env.DATABASE_URL_UNPOOLED);
 if (
   !["postgres:", "postgresql:"].includes(pooledUrl.protocol) ||
   !["postgres:", "postgresql:"].includes(directUrl.protocol) ||
   !pooledUrl.hostname.endsWith(".neon.tech") ||
   !directUrl.hostname.endsWith(".neon.tech")
 ) {
-  throw new Error("DATABASE_URL and DIRECT_URL must be Neon PostgreSQL URLs");
+  throw new Error("DATABASE_URL and DATABASE_URL_UNPOOLED must be Neon PostgreSQL URLs");
 }
 if (!pooledUrl.hostname.includes("-pooler")) {
   throw new Error("DATABASE_URL must use the pooled Neon hostname containing -pooler");
 }
 if (directUrl.hostname.includes("-pooler")) {
-  throw new Error("DIRECT_URL must use the direct Neon hostname without -pooler");
+  throw new Error("DATABASE_URL_UNPOOLED must use the direct Neon hostname without -pooler");
 }
 if (
   pooledUrl.searchParams.get("sslmode") !== "require" ||
