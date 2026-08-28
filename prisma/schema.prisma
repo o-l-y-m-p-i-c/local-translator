@@ -86,3 +86,22 @@ model TranslationJob {
 
   @@index([workspaceId, status])
 }
+
+model ContentTranslationJob {
+  id              String   @id @default(cuid())
+  shop            String
+  targetLocale    String
+  resourceType    String
+  status          String   @default("pending") // pending, active, completed, failed, cancelled
+  totalItems      Int      @default(0)
+  completedItems  Int      @default(0)
+  failedItems     Int      @default(0)
+  model           String?
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  completedAt     DateTime?
+
+  @@index([shop, status])
+  @@index([shop, targetLocale])
+}

@@ -46,19 +46,6 @@ const RESOURCE_CATEGORIES: Array<{ label: string; types: Array<{ value: string; 
   },
 ];
 
-const TARGET_LANGUAGES = [
-  { value: "lv", label: "Latvian (lv)" },
-  { value: "de", label: "German (de)" },
-  { value: "fr", label: "French (fr)" },
-  { value: "es", label: "Spanish (es)" },
-  { value: "ru", label: "Russian (ru)" },
-  { value: "et", label: "Estonian (et)" },
-  { value: "lt", label: "Lithuanian (lt)" },
-  { value: "pl", label: "Polish (pl)" },
-  { value: "fi", label: "Finnish (fi)" },
-  { value: "sv", label: "Swedish (sv)" },
-];
-
 type ResourceData = {
   resourceId: string;
   name: string;
@@ -73,6 +60,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const after = url.searchParams.get("after") || null;
 
   const { getShopGeminiConfiguration, translationsLib } = await loadServerModules();
+  const { getDashboardData } = await import("../lib/shopify-theme.server");
+  const { shopLocales } = await getDashboardData(admin);
+  const targetLocales = shopLocales.filter((l) => !l.primary);
+
   const configuration = await getShopGeminiConfiguration(session.shop);
   const gemini = {
     configured: Boolean(configuration),
@@ -80,7 +71,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   };
 
   if (!resourceType || !targetLocale) {
-    return { gemini, resourceType: "", targetLocale: "", resources: [], hasNextPage: false, endCursor: null };
+    return { gemini, resourceType: "", targetLocale: "", resources: [], hasNextPage: false, endCursor: null, targetLocales };
   }
 
   try {
@@ -92,6 +83,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       resources: result.resources as unknown as ResourceData[],
       hasNextPage: result.hasNextPage,
       endCursor: result.endCursor,
+      targetLocales,
     };
   } catch (error) {
     console.error("[translations loader] error:", error);
@@ -107,15 +99,54 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
   const targetLocale = String(form.get("targetLocale") || "");
+  const resourceType = String(form.get("resourceType") || "");
   const resourceId = String(form.get("resourceId") || "");
-
-  if (!targetLocale || !resourceId) {
-    return Response.json({ ok: false, message: "Missing target locale or resource ID" }, { status: 400 });
-  }
 
   const { translateBatch, getShopGeminiConfiguration, translationsLib } = await loadServerModules();
 
   try {
+    if (intent === "translateAll") {
+      if (!targetLocale || !resourceType) throw new Error("Missing target locale or resource type");
+      const configuration = await getShopGeminiConfiguration(session.shop);
+      if (!configuration) throw new Error("Configure a Gemini API key in Settings first");
+
+      let cursor: string | null = null;
+      let hasMore = true;
+      let totalTranslated = 0;
+      let totalErrors = 0;
+
+      while (hasMore) {
+        const result = await translationsLib.getTranslatableResources(admin, resourceType as never, cursor, 10);
+        for (const resource of result.resources) {
+          if (!resource.translatableContent.length) continue;
+          try {
+            const items = resource.translatableContent.map((c) => ({ key: c.key, source: c.value }));
+            const geminiResult = await translateBatch(items, "en", targetLocale, configuration.apiKey, configuration.model);
+            const translations = resource.translatableContent.map((c) => ({
+              key: c.key,
+              value: geminiResult.translations[c.key] || "",
+              digest: c.digest,
+            })).filter((t) => t.value && t.digest);
+            if (translations.length) {
+              await translationsLib.registerTranslations(admin, resource.resourceId, targetLocale, translations);
+              totalTranslated += translations.length;
+            }
+          } catch (error) {
+            console.error(`[translateAll] resource ${resource.resourceId} failed:`, error);
+            totalErrors++;
+          }
+        }
+        hasMore = result.hasNextPage;
+        cursor = result.endCursor;
+        if (totalTranslated > 5000) break;
+      }
+      return { ok: true, message: `Translated ${totalTranslated} field(s)${totalErrors ? `, ${totalErrors} errors` : ""}` };
+    }
+
+    if (!targetLocale || !resourceId) {
+      return Response.json({ ok: false, message: "Missing target locale or resource ID" }, { status: 400 });
+    }
+
     if (intent === "translate") {
       const configuration = await getShopGeminiConfiguration(session.shop);
       if (!configuration) throw new Error("Configure a Gemini API key in Settings first");
@@ -193,6 +224,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 };
 
+type AdminClientType = {
+  graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
+};
+
 export default function TranslationsPage() {
   const data = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
@@ -204,11 +239,14 @@ export default function TranslationsPage() {
   const [extraResources, setExtraResources] = useState<ResourceData[]>([]);
   const [moreCursor, setMoreCursor] = useState<string | null>(data.endCursor);
   const [hasMore, setHasMore] = useState(data.hasNextPage);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [translatingAll, setTranslatingAll] = useState(false);
   const moreFetcher = useFetcher<typeof loader>();
 
   useEffect(() => {
     if (fetcher.data?.message) shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
-  }, [fetcher.data, shopify]);
+    if (fetcher.state === "idle" && translatingAll) setTranslatingAll(false);
+  }, [fetcher.data, fetcher.state, shopify, translatingAll]);
 
   useEffect(() => {
     setEditingResource(null);
@@ -216,6 +254,7 @@ export default function TranslationsPage() {
     setExtraResources([]);
     setMoreCursor(data.endCursor);
     setHasMore(data.hasNextPage);
+    setSearchQuery("");
   }, [data.resourceType, data.targetLocale]);
 
   useEffect(() => {
@@ -271,8 +310,8 @@ export default function TranslationsPage() {
                 style={{ display: "block", width: "100%", padding: 10, marginTop: 6 }}
               >
                 <option value="">Select a target language</option>
-                {TARGET_LANGUAGES.map((lang) => (
-                  <option key={lang.value} value={lang.value}>{lang.label}</option>
+                {data.targetLocales.map((locale) => (
+                  <option key={locale.locale} value={locale.locale}>{locale.name} ({locale.locale}){locale.published ? " — published" : ""}</option>
                 ))}
               </select>
             </label>
@@ -296,7 +335,42 @@ export default function TranslationsPage() {
       {resources.length > 0 && (
         <s-section heading={`Translatable content (${resources.length} loaded)`}>
           <s-stack direction="block" gap="base">
-            {resources.map((resource) => {
+            <s-stack direction="inline" gap="small">
+              <input
+                type="search"
+                placeholder="Search by name or content..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.currentTarget.value)}
+                style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+              />
+              <fetcher.Form method="post" style={{ display: "inline" }}>
+                <input type="hidden" name="intent" value="translateAll" />
+                <input type="hidden" name="resourceType" value={data.resourceType} />
+                <input type="hidden" name="targetLocale" value={data.targetLocale} />
+                <s-button
+                  type="submit"
+                  variant="primary"
+                  loading={translatingAll || busy || undefined}
+                  disabled={!data.gemini.configured || undefined}
+                  onClick={() => setTranslatingAll(true)}
+                >
+                  Translate all with Gemini
+                </s-button>
+              </fetcher.Form>
+            </s-stack>
+            {translatingAll && (
+              <s-banner tone="info">Translating all content... This may take a while for large stores.</s-banner>
+            )}
+            {(() => {
+              const filtered = searchQuery.trim()
+                ? resources.filter((r) => {
+                    const q = searchQuery.toLowerCase();
+                    return r.name.toLowerCase().includes(q) ||
+                      r.translatableContent.some((c) => c.value.toLowerCase().includes(q) || c.key.toLowerCase().includes(q));
+                  })
+                : resources;
+              if (!filtered.length) return <s-paragraph>No resources match your search.</s-paragraph>;
+              return filtered.map((resource) => {
               const isEditing = editingResource === resource.resourceId;
               const hasContent = resource.translatableContent.length > 0;
               return (
@@ -431,8 +505,8 @@ export default function TranslationsPage() {
                   </s-stack>
                 </s-box>
               );
-            })}
-
+            });
+            })()}
             {hasMore && (
               <s-button onClick={loadMore} loading={moreFetcher.state !== "idle" || undefined}>
                 Load more
