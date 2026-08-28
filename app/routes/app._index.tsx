@@ -68,9 +68,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const themeId = url.searchParams.get("theme") || "";
-  const sourceFilename = url.searchParams.get("source") || "";
   const targetLocale = url.searchParams.get("target") || "";
-  console.log("[loader] shop:", session.shop, "theme:", themeId, "source:", sourceFilename, "target:", targetLocale);
+  console.log("[loader] shop:", session.shop, "theme:", themeId, "target:", targetLocale);
   let dashboard, settings;
   try {
     [dashboard, settings] = await Promise.all([
@@ -85,6 +84,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     configured: Boolean(settings?.encryptedGeminiApiKey),
     model: settings?.geminiModel ?? null,
   };
+  const primaryLocale = dashboard.shopLocales.find((l) => l.primary);
   const theme = dashboard.themes.find(({ id }) => id === themeId);
   let files: { filename: string; content: string }[] = [];
   if (theme) {
@@ -96,8 +96,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   }
 
+  // Auto-detect source file from the primary locale
+  let sourceFilename = "";
+  if (theme && primaryLocale && files.length) {
+    // Primary locale files are typically named like "locales/en.default.json" or "locales/en.json"
+    const possibleNames = [
+      `locales/${primaryLocale.locale}.default.json`,
+      `locales/${primaryLocale.locale}.json`,
+    ];
+    const found = files.find((f) => possibleNames.includes(f.filename));
+    if (found) sourceFilename = found.filename;
+  }
+
   if (!theme || !sourceFilename || !targetLocale) {
-    return { ...dashboard, gemini, lazyLoadPageSize: settings?.lazyLoadPageSize ?? 20, files: files.map(({ filename }) => filename), selection: null };
+    return { ...dashboard, gemini, lazyLoadPageSize: settings?.lazyLoadPageSize ?? 20, files: files.map(({ filename }) => filename), primaryLocale: primaryLocale?.locale ?? null, selection: null };
   }
 
   const sourceFile = files.find(({ filename }) => filename === sourceFilename);
@@ -176,6 +188,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ...dashboard,
     gemini,
     lazyLoadPageSize: settings?.lazyLoadPageSize ?? 20,
+    primaryLocale: primaryLocale?.locale ?? null,
     files: files.map(({ filename }) => filename),
     selection: {
       themeId,
@@ -584,17 +597,18 @@ export default function TranslatorDashboard() {
               </select>
             </div>
             <div style={{ flex: 1, minWidth: 180 }}>
-              <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Source file</label>
-              <select name="source" defaultValue={selection?.sourceFilename || ""} style={TABLE_STYLES.select}>
-                <option value="">Select a locale file</option>
-                {data.files.map((filename) => <option key={filename} value={filename}>{filename}</option>)}
-              </select>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+                Source language {data.primaryLocale && <span style={{ color: "#616161", fontWeight: 400 }}>(default: {data.primaryLocale})</span>}
+              </label>
+              <div style={{ ...TABLE_STYLES.select, background: "#f6f6f7", color: "#616161", cursor: "default" }}>
+                {data.primaryLocale ? `${data.primaryLocale} (auto-detected from store default)` : "Select a theme first"}
+              </div>
             </div>
             <div style={{ flex: 1, minWidth: 180 }}>
               <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Target language</label>
               <select name="target" defaultValue={selection?.targetLocale || ""} style={TABLE_STYLES.select}>
                 <option value="">Select target</option>
-                {data.shopLocales.map((locale) => <option key={locale.locale} value={locale.locale}>{locale.name} ({locale.locale}){locale.published ? "" : " — unpublished"}</option>)}
+                {data.shopLocales.filter((l) => !l.primary).map((locale) => <option key={locale.locale} value={locale.locale}>{locale.name} ({locale.locale}){locale.published ? "" : " — unpublished"}</option>)}
               </select>
             </div>
             <s-button type="submit" loading={navigation.state !== "idle" || undefined}>Open</s-button>
