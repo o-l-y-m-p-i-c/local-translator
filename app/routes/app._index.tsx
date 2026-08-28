@@ -192,6 +192,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     orderBy: { createdAt: "desc" },
   });
 
+  const versions = await prisma.translationVersion.findMany({
+    where: { workspaceId: workspace.id },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+  });
+
   return {
     ...dashboard,
     gemini,
@@ -209,6 +215,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       lastSyncedAt: workspace.lastSyncedAt.toISOString(),
       lastUpdatedAt: workspace.lastUpdatedAt.toISOString(),
       job: latestJob ? jobSummary(latestJob) : null,
+      versions: versions.map((v) => ({
+        id: v.id,
+        label: v.label,
+        createdAt: v.createdAt.toISOString(),
+        itemCount: Object.keys(JSON.parse(v.targetSnapshot) as FlatLocale).filter((k) => (JSON.parse(v.targetSnapshot) as FlatLocale)[k]?.trim()).length,
+      })),
     },
   };
 };
@@ -459,6 +471,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     if (intent === "publish") {
+      // Save a version snapshot before publishing
+      await prisma.translationVersion.create({
+        data: {
+          workspaceId: workspace.id,
+          targetSnapshot: JSON.stringify(target),
+          statusSnapshot: JSON.stringify(statuses),
+          label: `Published ${new Date().toLocaleString()}`,
+        },
+      });
       const publishable = Object.fromEntries(
         Object.entries(target).filter(([, value]) => value.trim()),
       );
@@ -466,6 +487,44 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await upsertThemeLocale(admin, themeId, localeFilenameFor(sourceFilename, targetLocale), output);
       return { ok: true, message: `${localeFilenameFor(sourceFilename, targetLocale)} published to Shopify` };
     }
+
+    if (intent === "saveVersion") {
+      await prisma.translationVersion.create({
+        data: {
+          workspaceId: workspace.id,
+          targetSnapshot: JSON.stringify(target),
+          statusSnapshot: JSON.stringify(statuses),
+          label: String(form.get("label") || `Saved ${new Date().toLocaleString()}`),
+        },
+      });
+      return { ok: true, message: "Version saved" };
+    }
+
+    if (intent === "restoreVersion") {
+      const versionId = String(form.get("versionId") || "");
+      const version = await prisma.translationVersion.findFirstOrThrow({
+        where: { id: versionId, workspace: { shop: session.shop, id: workspace.id } },
+      });
+      const restoredTarget = JSON.parse(version.targetSnapshot) as FlatLocale;
+      const restoredStatuses = JSON.parse(version.statusSnapshot) as StatusMap;
+      await prisma.translationWorkspace.update({
+        where: { id: workspace.id },
+        data: {
+          targetSnapshot: JSON.stringify(restoredTarget),
+          statusSnapshot: JSON.stringify(restoredStatuses),
+        },
+      });
+      return { ok: true, message: "Version restored" };
+    }
+
+    if (intent === "deleteVersion") {
+      const versionId = String(form.get("versionId") || "");
+      await prisma.translationVersion.deleteMany({
+        where: { id: versionId, workspace: { shop: session.shop, id: workspace.id } },
+      });
+      return { ok: true, message: "Version deleted" };
+    }
+
     throw new Error("Unknown action");
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";
@@ -686,6 +745,71 @@ export default function TranslatorDashboard() {
               </div>
             </s-section>
           )}
+
+          {/* Version history */}
+          <s-section heading="Version history">
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+              <fetcher.Form method="post" style={{ display: "flex", gap: 8, flex: 1, minWidth: 300 }}>
+                <input type="hidden" name="intent" value="saveVersion" />
+                <input type="hidden" name="themeId" value={selection.themeId} />
+                <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
+                <input type="hidden" name="targetLocale" value={selection.targetLocale} />
+                <input
+                  type="text"
+                  name="label"
+                  placeholder="Version label (optional)..."
+                  style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "1px solid #ddd", fontSize: 14 }}
+                />
+                <s-button type="submit" loading={busy || undefined}>Save version</s-button>
+              </fetcher.Form>
+            </div>
+
+            {selection.versions.length === 0 ? (
+              <p style={{ color: "#616161", fontSize: 13 }}>No saved versions yet. Versions are automatically saved when you publish, or you can save manually above.</p>
+            ) : (
+              <table style={TABLE_STYLES.table}>
+                <thead style={TABLE_STYLES.thead}>
+                  <tr>
+                    <th style={{ ...TABLE_STYLES.th, width: "15%" }}>Date</th>
+                    <th style={{ ...TABLE_STYLES.th, width: "50%" }}>Label</th>
+                    <th style={{ ...TABLE_STYLES.th, width: "10%" }}>Strings</th>
+                    <th style={{ ...TABLE_STYLES.th, width: "25%" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selection.versions.map((version) => (
+                    <tr key={version.id}>
+                      <td style={{ ...TABLE_STYLES.td, fontSize: 12, color: "#616161" }}>
+                        {new Date(version.createdAt).toLocaleString()}
+                      </td>
+                      <td style={TABLE_STYLES.td}>{version.label || "Untitled"}</td>
+                      <td style={TABLE_STYLES.td}>{version.itemCount}</td>
+                      <td style={TABLE_STYLES.td}>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <fetcher.Form method="post" style={{ display: "inline" }}>
+                            <input type="hidden" name="intent" value="restoreVersion" />
+                            <input type="hidden" name="themeId" value={selection.themeId} />
+                            <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
+                            <input type="hidden" name="targetLocale" value={selection.targetLocale} />
+                            <input type="hidden" name="versionId" value={version.id} />
+                            <s-button type="submit" loading={busy || undefined}>Restore</s-button>
+                          </fetcher.Form>
+                          <fetcher.Form method="post" style={{ display: "inline" }}>
+                            <input type="hidden" name="intent" value="deleteVersion" />
+                            <input type="hidden" name="themeId" value={selection.themeId} />
+                            <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
+                            <input type="hidden" name="targetLocale" value={selection.targetLocale} />
+                            <input type="hidden" name="versionId" value={version.id} />
+                            <s-button type="submit" tone="critical" loading={busy || undefined}>Delete</s-button>
+                          </fetcher.Form>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </s-section>
 
           {/* Strings table */}
           <s-section heading="Strings">

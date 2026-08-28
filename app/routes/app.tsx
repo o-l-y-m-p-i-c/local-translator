@@ -1,5 +1,5 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLoaderData, useRouteError, useFetcher } from "react-router";
+import { Outlet, useLoaderData, useRouteError, useFetcher, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { useEffect, useState } from "react";
@@ -161,14 +161,28 @@ export default function App() {
   }, [hasActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const jobs = fetcher.data?.activeJobs ?? data.activeJobs;
+  const location = useLocation();
+  const currentPath = location.pathname + location.search;
+
+  const navLinks = [
+    { href: "/app/languages", label: "Languages", match: (p: string) => p === "/app/languages" || p === "/app" },
+    { href: "/app?view=locales", label: "Locale files", match: (p: string) => p.startsWith("/app?view=locales") || (p === "/app" && location.search.includes("view=locales")) },
+    { href: "/app/translations", label: "Content", match: (p: string) => p.startsWith("/app/translations") },
+    { href: "/app/settings", label: "Settings", match: (p: string) => p.startsWith("/app/settings") },
+  ];
 
   return (
     <AppProvider embedded apiKey={data.apiKey}>
       <s-app-nav>
-        <s-link href="/app/languages">Languages</s-link>
-        <s-link href="/app?view=locales">Locale files</s-link>
-        <s-link href="/app/translations">Content</s-link>
-        <s-link href="/app/settings">Settings</s-link>
+        {navLinks.map((link) => (
+          <s-link
+            key={link.href}
+            href={link.href}
+            {...(link.match(currentPath) ? { "aria-current": "page" } : {})}
+          >
+            {link.label}
+          </s-link>
+        ))}
       </s-app-nav>
       <Outlet />
       <ActiveJobsWidget jobs={jobs} />

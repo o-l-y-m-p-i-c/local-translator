@@ -46,7 +46,7 @@ model ShopSettings {
 }
 
 model TranslationWorkspace {
-  id             String           @id @default(cuid())
+  id             String              @id @default(cuid())
   shop           String
   themeId        String
   themeName      String
@@ -57,12 +57,25 @@ model TranslationWorkspace {
   targetSnapshot String
   statusSnapshot String
   lastSyncedAt   DateTime
-  lastUpdatedAt  DateTime         @updatedAt
-  createdAt      DateTime         @default(now())
+  lastUpdatedAt  DateTime            @updatedAt
+  createdAt      DateTime            @default(now())
   jobs           TranslationJob[]
+  versions       TranslationVersion[]
 
   @@unique([shop, themeId, sourceFilename, targetLocale])
   @@index([shop, themeId])
+}
+
+model TranslationVersion {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  workspace      TranslationWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  targetSnapshot String
+  statusSnapshot String
+  label          String?
+  createdAt      DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
 }
 
 model TranslationJob {
