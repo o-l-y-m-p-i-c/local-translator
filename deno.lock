@@ -1,0 +1,59 @@
+{
+  "version": "5",
+  "remote": {
+    "https://edge.netlify.com/": "fd941d61d88673d5f28aab283fb86fcc50f08a3bc80ee5470498fcfa88c65cfb",
+    "https://edge.netlify.com/bootstrap/config.ts": "6a2ce0e544e15e8f8883a5c18da5948e37fd0f2619f68cb31f3af53c51817025",
+    "https://edge.netlify.com/bootstrap/context.ts": "e97240232121e2f369f6546ce961490f34d961ea1ea54be3ff09633e3f08373f",
+    "https://edge.netlify.com/bootstrap/cookie.ts": "8b0baae708989ca183c6f3b4ab3d029e6abcbc2e43f93edeb0ff447b3bbc3a05",
+    "https://edge.netlify.com/bootstrap/edge_function.ts": "b8253e86aa83c67341f5cfedeba5049d77fbf84dcab7eceff7566b7728ae9b39",
+    "https://edge.netlify.com/bootstrap/globals/types.ts": "eaa6148ded3121d8dee62dd91c86e7fe76601df0f3ca8d7962243a30f4c8935f"
+  },
+  "workspace": {
+    "packageJson": {
+      "dependencies": [
+        "npm:@google/genai@^1.30.0",
+        "npm:@neon/config@^1.0.5",
+        "npm:@neon/env@^1.1.5",
+        "npm:@neondatabase/serverless@^1.1.0",
+        "npm:@netlify/vite-plugin-react-router@^3.1.1",
+        "npm:@prisma/adapter-neon@^6.19.3",
+        "npm:@prisma/client@^6.16.3",
+        "npm:@react-router/dev@^7.12.0",
+        "npm:@react-router/fs-routes@^7.12.0",
+        "npm:@react-router/node@^7.12.0",
+        "npm:@react-router/serve@^7.12.0",
+        "npm:@shopify/api-codegen-preset@2",
+        "npm:@shopify/app-bridge-react@^4.2.4",
+        "npm:@shopify/polaris-types@1.0.1",
+        "npm:@shopify/shopify-app-react-router@^1.1.0",
+        "npm:@shopify/shopify-app-session-storage-prisma@9",
+        "npm:@types/eslint@^9.6.1",
+        "npm:@types/node@^25.5.2",
+        "npm:@types/react-dom@^18.3.7",
+        "npm:@types/react@^18.3.25",
+        "npm:@typescript-eslint/eslint-plugin@^6.21.0",
+        "npm:@typescript-eslint/parser@^6.21.0",
+        "npm:eslint-import-resolver-typescript@^4.4.4",
+        "npm:eslint-plugin-import@^2.32.0",
+        "npm:eslint-plugin-jsx-a11y@^6.10.2",
+        "npm:eslint-plugin-react-hooks@^7.0.1",
+        "npm:eslint-plugin-react@^7.37.5",
+        "npm:eslint@^8.57.1",
+        "npm:graphql-config@^5.1.1",
+        "npm:isbot@^5.1.31",
+        "npm:prettier@^3.6.2",
+        "npm:prisma@^6.16.3",
+        "npm:react-dom@^18.3.1",
+        "npm:react-router@^7.12.0",
+        "npm:react@^18.3.1",
+        "npm:typescript@^5.9.3",
+        "npm:vite-tsconfig-paths@^6.0.4",
+        "npm:vite@^7.3.1",
+        "npm:vitest@^3.2.4"
+      ],
+      "overrides": {
+        "p-map": "^4.0.0"
+      }
+    }
+  }
+}

@@ -98,16 +98,23 @@ export async function getThemeLocaleFiles(
           .join("; "),
       );
     }
-    localeFiles.push(
-      ...data.theme.files.nodes
-        .filter(
-          (file) =>
-            file.filename.startsWith("locales/") &&
-            file.filename.endsWith(".json") &&
-            typeof file.body?.content === "string",
-        )
-        .map((file) => ({ filename: file.filename, content: file.body!.content! })),
+    const localeNodes = data.theme.files.nodes.filter(
+      (file) =>
+        file.filename.startsWith("locales/") &&
+        file.filename.endsWith(".json") &&
+        !file.filename.endsWith(".schema.json"),
     );
+    console.log("[getThemeLocaleFiles] found", localeNodes.length, "locale files:",
+      localeNodes.map((f) => f.filename).join(", "));
+    for (const file of localeNodes) {
+      const content = file.body?.content;
+      if (typeof content !== "string") {
+        console.log("[getThemeLocaleFiles]", file.filename, "has no text content, skipping");
+        continue;
+      }
+      console.log("[getThemeLocaleFiles]", file.filename, "starts with:", JSON.stringify(content.slice(0, 80)));
+      localeFiles.push({ filename: file.filename, content });
+    }
     after = data.theme.files.pageInfo.hasNextPage
       ? data.theme.files.pageInfo.endCursor
       : null;

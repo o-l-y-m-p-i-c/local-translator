@@ -68,16 +68,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const themeId = url.searchParams.get("theme") || "";
   const sourceFilename = url.searchParams.get("source") || "";
   const targetLocale = url.searchParams.get("target") || "";
-  const [dashboard, settings] = await Promise.all([
-    getDashboardData(admin),
-    prisma.shopSettings.findUnique({ where: { shop: session.shop } }),
-  ]);
+  console.log("[loader] shop:", session.shop, "theme:", themeId, "source:", sourceFilename, "target:", targetLocale);
+  let dashboard, settings;
+  try {
+    [dashboard, settings] = await Promise.all([
+      getDashboardData(admin),
+      prisma.shopSettings.findUnique({ where: { shop: session.shop } }),
+    ]);
+  } catch (err) {
+    console.error("[loader] dashboard/settings error:", err);
+    throw err;
+  }
   const gemini = {
     configured: Boolean(settings?.encryptedGeminiApiKey),
     model: settings?.geminiModel ?? null,
   };
   const theme = dashboard.themes.find(({ id }) => id === themeId);
-  const files = theme ? await getThemeLocaleFiles(admin, theme.id) : [];
+  let files: { filename: string; content: string }[] = [];
+  if (theme) {
+    try {
+      files = await getThemeLocaleFiles(admin, theme.id);
+    } catch (err) {
+      console.error("[loader] getThemeLocaleFiles error:", err);
+      throw err;
+    }
+  }
 
   if (!theme || !sourceFilename || !targetLocale) {
     return { ...dashboard, gemini, files: files.map(({ filename }) => filename), selection: null };
@@ -85,11 +100,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const sourceFile = files.find(({ filename }) => filename === sourceFilename);
   if (!sourceFile) throw new Response("Selected source locale no longer exists", { status: 404 });
-  const sourceJson = parseLocaleJson(sourceFile.content);
+  let sourceJson: ReturnType<typeof parseLocaleJson>;
+  try {
+    sourceJson = parseLocaleJson(sourceFile.content);
+  } catch (err) {
+    console.error("[loader] parseLocaleJson error for", sourceFilename, err);
+    throw new Response(`Could not parse ${sourceFilename}: ${err instanceof Error ? err.message : "invalid JSON"}`, { status: 422 });
+  }
   const source = flattenLocale(sourceJson);
-  const existing = await prisma.translationWorkspace.findUnique({
-    where: workspaceKey(session.shop, theme.id, sourceFilename, targetLocale),
-  });
+  let existing;
+  try {
+    existing = await prisma.translationWorkspace.findUnique({
+      where: workspaceKey(session.shop, theme.id, sourceFilename, targetLocale),
+    });
+  } catch (err) {
+    console.error("[loader] prisma findUnique error:", err);
+    throw err;
+  }
   const shopifyTarget = files.find(({ filename }) => filename === localeFilenameFor(sourceFilename, targetLocale));
   const target = existing
     ? (JSON.parse(existing.targetSnapshot) as FlatLocale)
@@ -111,27 +138,33 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ) statuses[key] = "stale";
   }
   const now = new Date();
-  const workspace = await prisma.translationWorkspace.upsert({
-    where: workspaceKey(session.shop, theme.id, sourceFilename, targetLocale),
-    create: {
-      shop: session.shop,
-      themeId: theme.id,
+  let workspace;
+  try {
+    workspace = await prisma.translationWorkspace.upsert({
+      where: workspaceKey(session.shop, theme.id, sourceFilename, targetLocale),
+      create: {
+        shop: session.shop,
+        themeId: theme.id,
+        themeName: theme.name,
+        sourceFilename,
+        sourceLocale: localeFromFilename(sourceFilename),
+        targetLocale,
+        sourceSnapshot: JSON.stringify(source),
+        targetSnapshot: JSON.stringify(target),
+        statusSnapshot: JSON.stringify(statuses),
+        lastSyncedAt: now,
+      },
+      update: {
       themeName: theme.name,
-      sourceFilename,
-      sourceLocale: localeFromFilename(sourceFilename),
-      targetLocale,
       sourceSnapshot: JSON.stringify(source),
-      targetSnapshot: JSON.stringify(target),
       statusSnapshot: JSON.stringify(statuses),
       lastSyncedAt: now,
     },
-    update: {
-      themeName: theme.name,
-      sourceSnapshot: JSON.stringify(source),
-      statusSnapshot: JSON.stringify(statuses),
-      lastSyncedAt: now,
-    },
-  });
+    });
+  } catch (err) {
+    console.error("[loader] prisma upsert error:", err);
+    throw err;
+  }
   const latestJob = await prisma.translationJob.findFirst({
     where: { workspaceId: workspace.id },
     orderBy: { createdAt: "desc" },
@@ -374,6 +407,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     throw new Error("Unknown action");
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";
+    console.error("[action] intent:", intent, "error:", error);
     const message = [
       "Translation key is invalid",
       "Configure a Gemini API key in Settings first",
@@ -383,7 +417,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       detail.startsWith("Gemini changed protected tokens") || detail.startsWith("Gemini omitted")
       ? detail
       : "The translation request could not be completed";
-    return Response.json({ ok: false, message }, { status: 400 });
+    return Response.json({ ok: false, message, detail }, { status: 400 });
   }
 };
 

@@ -103,7 +103,17 @@ export function validatePlaceholders(source: string, translation: string): strin
 }
 
 export function parseLocaleJson(content: string): LocaleJson {
-  const parsed: unknown = JSON.parse(content);
+  let jsonContent = content.trimStart();
+  // Some theme locale files may have a comment header before the JSON object.
+  // Try to find the first `{` and parse from there.
+  if (!jsonContent.startsWith("{")) {
+    const braceIdx = jsonContent.indexOf("{");
+    if (braceIdx === -1) {
+      throw new Error(`Locale file does not contain a JSON object (starts with "${jsonContent.slice(0, 40)}...")`);
+    }
+    jsonContent = jsonContent.slice(braceIdx);
+  }
+  const parsed: unknown = JSON.parse(jsonContent);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Locale file must contain a JSON object");
   }
