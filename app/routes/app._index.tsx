@@ -7,6 +7,7 @@ import type {
 import { Form, useFetcher, useLoaderData, useNavigation, useRevalidator } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import { HighlightText } from "../components/HighlightText";
 import prisma from "../db.server";
 import { isRetryableGeminiError, translateBatch } from "../lib/gemini.server";
 import { getShopGeminiConfiguration } from "../lib/gemini-settings.server";
@@ -744,10 +745,10 @@ export default function TranslatorDashboard() {
                         <input type="hidden" name="intent" value="save" />
                         <s-stack direction="block" gap="small">
                           <s-stack direction="inline" gap="small">
-                            <s-heading>{key}</s-heading>
+                            <s-heading><HighlightText text={key} query={searchQuery} /></s-heading>
                             <s-badge tone={selection.statuses[key] === "translated" ? "success" : selection.statuses[key] === "stale" ? "warning" : "critical"}>{selection.statuses[key]}</s-badge>
                           </s-stack>
-                          <s-paragraph>{source}</s-paragraph>
+                          <s-paragraph><HighlightText text={source} query={searchQuery} /></s-paragraph>
                           <textarea
                             name="translation"
                             value={currentValue}

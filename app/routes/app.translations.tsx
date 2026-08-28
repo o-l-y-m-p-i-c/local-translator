@@ -7,6 +7,7 @@ import type {
 import { useFetcher, useLoaderData, useNavigation, Form } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import { HighlightText } from "../components/HighlightText";
 import { authenticate } from "../shopify.server";
 
 async function loadServerModules() {
@@ -381,7 +382,7 @@ export default function TranslationsPage() {
                 <s-box key={resource.resourceId} padding="base" borderWidth="base" borderRadius="base">
                   <s-stack direction="block" gap="small">
                     <s-stack direction="inline" gap="small">
-                      <s-heading>{resource.name}</s-heading>
+                      <s-heading><HighlightText text={resource.name} query={searchQuery} /></s-heading>
                       <s-badge tone={hasContent ? "info" : "critical"}>
                         {hasContent ? `${resource.translatableContent.length} fields` : "no content"}
                       </s-badge>
@@ -494,8 +495,8 @@ export default function TranslationsPage() {
                             {resource.translatableContent.slice(0, 3).map((content) => (
                               <s-box key={content.key} padding="small" borderWidth="base" borderRadius="base">
                                 <s-stack direction="block" gap="small">
-                                  <s-text><strong>{content.key}</strong></s-text>
-                                  <s-paragraph>{content.value.slice(0, 200)}{content.value.length > 200 ? "..." : ""}</s-paragraph>
+                                  <s-text><strong><HighlightText text={content.key} query={searchQuery} /></strong></s-text>
+                                  <s-paragraph><HighlightText text={content.value.slice(0, 200) + (content.value.length > 200 ? "..." : "")} query={searchQuery} /></s-paragraph>
                                 </s-stack>
                               </s-box>
                             ))}
