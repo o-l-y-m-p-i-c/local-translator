@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "re
 import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import { TABLE_STYLES } from "../components/tableStyles";
 import prisma from "../db.server";
 import { countTranslationTokens } from "../lib/gemini.server";
 import {
@@ -134,89 +135,104 @@ export default function Settings() {
   };
 
   return (
-    <s-page heading="Gemini settings">
-      <s-section heading="Shop configuration">
+    <s-page heading="Settings">
+      {/* Status banner */}
+      <s-banner tone={data.configured ? "success" : "warning"}>
+        {data.configured
+          ? `Gemini is configured · Model: ${data.model} · Last updated ${data.updatedAt ? new Date(data.updatedAt).toLocaleString() : "never"}`
+          : "Gemini is not configured. Enter an API key below to start translating."}
+      </s-banner>
+
+      <s-section heading="Gemini API">
         <fetcher.Form method="post" ref={formRef}>
-          <s-stack direction="block" gap="base">
-            <s-paragraph>
-              Status: {data.configured ? "API key configured" : "API key not configured"}.
-              {data.updatedAt ? ` Last updated ${new Date(data.updatedAt).toLocaleString()}.` : ""}
-            </s-paragraph>
-            <s-password-field
-              label={data.configured ? "Replace Gemini API key" : "Gemini API key"}
-              name="apiKey"
-              autocomplete="off"
-              placeholder={data.configured ? "Leave blank to keep the stored key" : "Enter API key"}
-            />
-            <s-text-field
-              label="Gemini model"
-              name="model"
-              value={modelValue}
-              onChange={(e) => setModelValue((e.currentTarget as unknown as HTMLInputElement).value)}
-              autocomplete="off"
-              placeholder="e.g. gemini-2.5-flash"
-              required
-            />
-            <s-stack direction="inline" gap="small">
-              {GEMINI_MODELS.map((model) => (
-                <s-button
-                  key={model}
-                  variant={modelValue === model ? "primary" : "secondary"}
-                  onClick={() => setModelValue(model)}
-                >
-                  {model}
-                </s-button>
-              ))}
-            </s-stack>
-            <s-number-field
-              label="Items per request"
-              name="batchSize"
-              defaultValue={String(data.batchSize)}
-              min={MIN_BATCH_SIZE}
-              max={MAX_BATCH_SIZE}
-              step={1}
-              required
-            />
-            <s-number-field
-              label="Items per page (lazy load)"
-              name="lazyLoadPageSize"
-              defaultValue={String(data.lazyLoadPageSize)}
-              min={MIN_LAZY_LOAD_PAGE_SIZE}
-              max={MAX_LAZY_LOAD_PAGE_SIZE}
-              step={1}
-              required
-            />
-            <s-paragraph>
-              Controls how many strings or resources are shown at once on the Locale files and Content pages before clicking "Load more".
-            </s-paragraph>
-            <s-paragraph>
-              The API key is encrypted on the server and is never displayed after submission.
-            </s-paragraph>
-            <s-stack direction="inline" gap="base">
-              <s-button
-                onClick={() => submit("test")}
-                loading={fetcher.state !== "idle" || undefined}
-              >
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                {data.configured ? "Replace API key (leave blank to keep)" : "API key"}
+              </label>
+              <s-password-field
+                name="apiKey"
+                autocomplete="off"
+                placeholder={data.configured ? "••••••••••••" : "Enter your Gemini API key"}
+              />
+              <p style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
+                The key is encrypted on the server and never displayed after saving. Get one at Google AI Studio (https://aistudio.google.com/apikey).
+              </p>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Model</label>
+              <s-text-field
+                name="model"
+                value={modelValue}
+                onChange={(e) => setModelValue((e.currentTarget as unknown as HTMLInputElement).value)}
+                autocomplete="off"
+                placeholder="e.g. gemini-2.5-flash"
+                required
+              />
+              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                {GEMINI_MODELS.map((model) => (
+                  <button
+                    key={model}
+                    type="button"
+                    style={TABLE_STYLES.tabButton(modelValue === model)}
+                    onClick={() => setModelValue(model)}
+                  >
+                    {model}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                  Items per request (batch size)
+                </label>
+                <s-number-field
+                  name="batchSize"
+                  defaultValue={String(data.batchSize)}
+                  min={MIN_BATCH_SIZE}
+                  max={MAX_BATCH_SIZE}
+                  step={1}
+                  required
+                />
+                <p style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
+                  How many strings to send to Gemini in one request. {MIN_BATCH_SIZE}–{MAX_BATCH_SIZE}.
+                </p>
+              </div>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                  Items per page (lazy load)
+                </label>
+                <s-number-field
+                  name="lazyLoadPageSize"
+                  defaultValue={String(data.lazyLoadPageSize)}
+                  min={MIN_LAZY_LOAD_PAGE_SIZE}
+                  max={MAX_LAZY_LOAD_PAGE_SIZE}
+                  step={1}
+                  required
+                />
+                <p style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
+                  How many items to show before "Load more". {MIN_LAZY_LOAD_PAGE_SIZE}–{MAX_LAZY_LOAD_PAGE_SIZE}.
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <s-button onClick={() => submit("test")} loading={fetcher.state !== "idle" || undefined}>
                 Test configuration
               </s-button>
-              <s-button
-                onClick={() => submit("save")}
-                variant="primary"
-                loading={fetcher.state !== "idle" || undefined}
-              >
-                Save
+              <s-button onClick={() => submit("save")} variant="primary" loading={fetcher.state !== "idle" || undefined}>
+                Save settings
               </s-button>
               {data.configured && (
-                <s-button
-                  onClick={() => submit("clear")}
-                  tone="critical"
-                  loading={fetcher.state !== "idle" || undefined}
-                >
-                  Clear key
+                <s-button onClick={() => submit("clear")} tone="critical" loading={fetcher.state !== "idle" || undefined}>
+                  Clear API key
                 </s-button>
               )}
-            </s-stack>
-          </s-stack>
+            </div>
+          </div>
         </fetcher.Form>
       </s-section>
     </s-page>

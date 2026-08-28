@@ -7,6 +7,7 @@ import type {
 import { useFetcher, useLoaderData, useNavigation } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import { TABLE_STYLES } from "../components/tableStyles";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 
@@ -191,103 +192,142 @@ export default function LanguagesPage() {
   const getJob = (locale: string, resourceType: string) =>
     jobByKey.get(`${locale}:${resourceType}`) || jobByKey.get(`${locale}:ALL`);
 
+  const statusBadge = (status: string | undefined) => {
+    if (!status) return <span style={{ ...TABLE_STYLES.badge, ...TABLE_STYLES.badgeNeutral }}>Not started</span>;
+    const styles = status === "completed" ? TABLE_STYLES.badgeSuccess
+      : status === "active" || status === "pending" ? TABLE_STYLES.badgeInfo
+      : status === "failed" ? TABLE_STYLES.badgeCritical
+      : status === "cancelled" ? TABLE_STYLES.badgeWarning
+      : TABLE_STYLES.badgeNeutral;
+    return <span style={{ ...TABLE_STYLES.badge, ...styles }}>{status}</span>;
+  };
+
   return (
     <s-page heading="Languages">
       <s-section heading="Translate store content">
         <s-paragraph>
-          Translate all translatable content to a target language. Click a language to expand and translate individual categories, or use "Translate full" for everything at once.
+          Translate all translatable content to a target language. Expand a language to translate individual categories, or use "Translate full" for everything.
         </s-paragraph>
-        <s-stack direction="block" gap="base">
-          {data.targetLocales.map((lang) => {
-            const fullJob = getJob(lang.locale, "ALL");
-            const isActive = fullJob?.status === "active" || fullJob?.status === "pending";
-            const isCompleted = fullJob?.status === "completed";
-            const isFailed = fullJob?.status === "failed";
-            const isCancelled = fullJob?.status === "cancelled";
-            const isExpanded = expandedLocale === lang.locale;
-            const progress = fullJob?.totalItems ? Math.round((fullJob.completedItems / fullJob.totalItems) * 100) : 0;
-            const anyCategoryActive = RESOURCE_CATEGORIES.some((cat) =>
-              cat.types.some((t) => {
-                const j = getJob(lang.locale, t);
-                return j?.status === "active" || j?.status === "pending";
-              }),
-            );
 
-            return (
-              <s-box key={lang.locale} padding="base" borderWidth="base" borderRadius="base">
-                <s-stack direction="block" gap="small">
-                  {/* Header row */}
-                  <s-stack direction="inline" gap="base">
-                    <s-stack direction="block" gap="small">
-                      <s-heading>{lang.name} ({lang.locale}){lang.published ? "" : " — unpublished"}</s-heading>
-                      {isActive && (
-                        <s-stack direction="block" gap="small">
-                          <s-paragraph>Translating... {fullJob?.completedItems}/{fullJob?.totalItems} ({progress}%)</s-paragraph>
-                          <progress value={fullJob?.completedItems || 0} max={fullJob?.totalItems || 1} style={{ width: "100%" }} />
-                        </s-stack>
-                      )}
-                      {isCompleted && <s-paragraph>Full translation completed</s-paragraph>}
-                      {isFailed && <s-paragraph tone="critical">Failed: {fullJob?.error}</s-paragraph>}
-                      {isCancelled && <s-paragraph>Cancelled</s-paragraph>}
-                      {!fullJob && <s-paragraph>Not fully translated yet</s-paragraph>}
-                    </s-stack>
-                    <s-stack direction="inline" gap="small">
-                      {!isActive && !anyCategoryActive && (
-                        <fetcher.Form method="post">
-                          <input type="hidden" name="intent" value="translateFull" />
-                          <input type="hidden" name="targetLocale" value={lang.locale} />
-                          <s-button type="submit" variant="primary" loading={busy || undefined}>
-                            Translate full
-                          </s-button>
-                        </fetcher.Form>
-                      )}
-                      {(isActive || anyCategoryActive) && (
-                        <fetcher.Form method="post">
-                          <input type="hidden" name="intent" value="cancel" />
-                          <input type="hidden" name="targetLocale" value={lang.locale} />
-                          <s-button type="submit" tone="critical" loading={busy || undefined}>
-                            Cancel
-                          </s-button>
-                        </fetcher.Form>
-                      )}
-                      <s-button
-                        onClick={() => setExpandedLocale(isExpanded ? null : lang.locale)}
-                      >
-                        {isExpanded ? "Hide categories" : "Show categories"}
-                      </s-button>
-                    </s-stack>
-                  </s-stack>
+        <table style={TABLE_STYLES.table}>
+          <thead style={TABLE_STYLES.thead}>
+            <tr>
+              <th style={{ ...TABLE_STYLES.th, width: "20%" }}>Language</th>
+              <th style={{ ...TABLE_STYLES.th, width: "15%" }}>Status</th>
+              <th style={{ ...TABLE_STYLES.th, width: "30%" }}>Progress</th>
+              <th style={{ ...TABLE_STYLES.th, width: "35%" }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.targetLocales.map((lang) => {
+              const fullJob = getJob(lang.locale, "ALL");
+              const isActive = fullJob?.status === "active" || fullJob?.status === "pending";
+              const isExpanded = expandedLocale === lang.locale;
+              const progress = fullJob?.totalItems ? Math.round((fullJob.completedItems / fullJob.totalItems) * 100) : 0;
+              const anyCategoryActive = RESOURCE_CATEGORIES.some((cat) =>
+                cat.types.some((t) => {
+                  const j = getJob(lang.locale, t);
+                  return j?.status === "active" || j?.status === "pending";
+                }),
+              );
 
-                  {/* Expanded categories */}
+              return (
+                <>
+                  <tr key={lang.locale} style={TABLE_STYLES.trHover}>
+                    <td style={TABLE_STYLES.td}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button
+                          onClick={() => setExpandedLocale(isExpanded ? null : lang.locale)}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 0 }}
+                        >
+                          {isExpanded ? "▼" : "▶"}
+                        </button>
+                        <div>
+                          <strong style={{ fontSize: 14 }}>{lang.name}</strong>
+                          <div style={{ fontSize: 12, color: "#616161" }}>{lang.locale}{lang.published ? "" : " · unpublished"}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={TABLE_STYLES.td}>{statusBadge(fullJob?.status)}</td>
+                    <td style={TABLE_STYLES.td}>
+                      {fullJob ? (
+                        <div>
+                          <div style={TABLE_STYLES.progressBar}>
+                            <div style={TABLE_STYLES.progressFill(progress)} />
+                          </div>
+                          <div style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
+                            {fullJob.completedItems} / {fullJob.totalItems} ({progress}%)
+                            {fullJob.error && <span style={{ color: "#c50f0f" }}> · {fullJob.error}</span>}
+                          </div>
+                        </div>
+                      ) : (
+                        <span style={{ color: "#999", fontSize: 13 }}>—</span>
+                      )}
+                    </td>
+                    <td style={TABLE_STYLES.td}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {!isActive && !anyCategoryActive && (
+                          <fetcher.Form method="post" style={{ display: "inline" }}>
+                            <input type="hidden" name="intent" value="translateFull" />
+                            <input type="hidden" name="targetLocale" value={lang.locale} />
+                            <s-button type="submit" variant="primary" loading={busy || undefined}>
+                              Translate full
+                            </s-button>
+                          </fetcher.Form>
+                        )}
+                        {(isActive || anyCategoryActive) && (
+                          <fetcher.Form method="post" style={{ display: "inline" }}>
+                            <input type="hidden" name="intent" value="cancel" />
+                            <input type="hidden" name="targetLocale" value={lang.locale} />
+                            <s-button type="submit" tone="critical" loading={busy || undefined}>
+                              Cancel
+                            </s-button>
+                          </fetcher.Form>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
                   {isExpanded && (
-                    <s-stack direction="block" gap="small">
-                      {RESOURCE_CATEGORIES.map((category) => (
-                        <s-box key={category.label} padding="small" borderWidth="base" borderRadius="base">
-                          <s-stack direction="block" gap="small">
-                            <s-heading>{category.label}</s-heading>
-                            <s-stack direction="inline" gap="small">
-                              {category.types.map((rt) => {
+                    <tr key={`${lang.locale}-expand`}>
+                      <td colSpan={4} style={{ ...TABLE_STYLES.td, background: "#fafafa", padding: 16 }}>
+                        <table style={TABLE_STYLES.table}>
+                          <thead style={TABLE_STYLES.thead}>
+                            <tr>
+                              <th style={{ ...TABLE_STYLES.th, width: "15%" }}>Category</th>
+                              <th style={{ ...TABLE_STYLES.th, width: "25%" }}>Resource type</th>
+                              <th style={{ ...TABLE_STYLES.th, width: "15%" }}>Status</th>
+                              <th style={{ ...TABLE_STYLES.th, width: "25%" }}>Progress</th>
+                              <th style={{ ...TABLE_STYLES.th, width: "20%" }}>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {RESOURCE_CATEGORIES.map((category) =>
+                              category.types.map((rt, idx) => {
                                 const catJob = getJob(lang.locale, rt);
                                 const catActive = catJob?.status === "active" || catJob?.status === "pending";
-                                const catDone = catJob?.status === "completed";
-                                const catFailed = catJob?.status === "failed";
                                 const catProgress = catJob?.totalItems ? Math.round((catJob.completedItems / catJob.totalItems) * 100) : 0;
-
                                 return (
-                                  <s-box key={rt} padding="small" borderWidth="base" borderRadius="base">
-                                    <s-stack direction="block" gap="small">
-                                      <s-text><strong>{RESOURCE_LABELS[rt]}</strong></s-text>
-                                      {catActive && (
-                                        <s-stack direction="block" gap="small">
-                                          <s-paragraph>Translating... {catJob?.completedItems}/{catJob?.totalItems} ({catProgress}%)</s-paragraph>
-                                          <progress value={catJob?.completedItems || 0} max={catJob?.totalItems || 1} style={{ width: "100%" }} />
-                                        </s-stack>
-                                      )}
-                                      {catDone && <s-paragraph>Done</s-paragraph>}
-                                      {catFailed && <s-paragraph tone="critical">Failed: {catJob?.error}</s-paragraph>}
-                                      {!catJob && !catActive && <s-paragraph>Not translated</s-paragraph>}
+                                  <tr key={`${category.label}-${rt}`}>
+                                    <td style={TABLE_STYLES.td}>
+                                      {idx === 0 ? <strong style={{ fontSize: 13 }}>{category.label}</strong> : ""}
+                                    </td>
+                                    <td style={TABLE_STYLES.td}><span style={{ fontSize: 13 }}>{RESOURCE_LABELS[rt]}</span></td>
+                                    <td style={TABLE_STYLES.td}>{statusBadge(catJob?.status)}</td>
+                                    <td style={TABLE_STYLES.td}>
+                                      {catJob ? (
+                                        <div>
+                                          <div style={TABLE_STYLES.progressBar}>
+                                            <div style={TABLE_STYLES.progressFill(catProgress)} />
+                                          </div>
+                                          <div style={{ fontSize: 11, color: "#616161", marginTop: 2 }}>
+                                            {catJob.completedItems} / {catJob.totalItems} ({catProgress}%)
+                                          </div>
+                                        </div>
+                                      ) : <span style={{ color: "#999", fontSize: 12 }}>—</span>}
+                                    </td>
+                                    <td style={TABLE_STYLES.td}>
                                       {!catActive && (
-                                        <fetcher.Form method="post">
+                                        <fetcher.Form method="post" style={{ display: "inline" }}>
                                           <input type="hidden" name="intent" value="translateCategory" />
                                           <input type="hidden" name="targetLocale" value={lang.locale} />
                                           <input type="hidden" name="resourceType" value={rt} />
@@ -300,21 +340,21 @@ export default function LanguagesPage() {
                                           </s-button>
                                         </fetcher.Form>
                                       )}
-                                    </s-stack>
-                                  </s-box>
+                                    </td>
+                                  </tr>
                                 );
-                              })}
-                            </s-stack>
-                          </s-stack>
-                        </s-box>
-                      ))}
-                    </s-stack>
+                              }),
+                            )}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
                   )}
-                </s-stack>
-              </s-box>
-            );
-          })}
-        </s-stack>
+                </>
+              );
+            })}
+          </tbody>
+        </table>
       </s-section>
     </s-page>
   );

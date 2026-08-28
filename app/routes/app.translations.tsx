@@ -8,6 +8,7 @@ import { useFetcher, useLoaderData, useNavigation, Form } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { HighlightText } from "../components/HighlightText";
+import { TABLE_STYLES } from "../components/tableStyles";
 import { authenticate } from "../shopify.server";
 
 async function loadServerModules() {
@@ -284,17 +285,24 @@ export default function TranslationsPage() {
   const resources = [...(data.resources as unknown as ResourceData[]), ...extraResources];
 
   return (
-    <s-page heading="Content translations">
+    <s-page heading="Content">
+      {!data.gemini.configured && (
+        <s-banner tone="warning">
+          Gemini is not configured. <s-link href="/app/settings">Add an API key in Settings</s-link>.
+        </s-banner>
+      )}
+
+      {/* Selector */}
       <s-section heading="Select content type">
         <Form method="get">
-          <s-stack direction="block" gap="base">
-            <label>
-              <s-text>Content type</s-text>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Content type</label>
               <select
                 name="resourceType"
                 defaultValue={data.resourceType || ""}
                 required
-                style={{ display: "block", width: "100%", padding: 10, marginTop: 6 }}
+                style={TABLE_STYLES.select}
               >
                 <option value="">Select a content type</option>
                 {RESOURCE_CATEGORIES.map((cat) => (
@@ -305,219 +313,220 @@ export default function TranslationsPage() {
                   </optgroup>
                 ))}
               </select>
-            </label>
-            <label>
-              <s-text>Target language</s-text>
+            </div>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Target language</label>
               <select
                 name="target"
                 defaultValue={data.targetLocale || ""}
                 required
-                style={{ display: "block", width: "100%", padding: 10, marginTop: 6 }}
+                style={TABLE_STYLES.select}
               >
-                <option value="">Select a target language</option>
+                <option value="">Select target</option>
                 {data.targetLocales.map((locale) => (
-                  <option key={locale.locale} value={locale.locale}>{locale.name} ({locale.locale}){locale.published ? " — published" : ""}</option>
+                  <option key={locale.locale} value={locale.locale}>{locale.name} ({locale.locale}){locale.published ? "" : " — unpublished"}</option>
                 ))}
               </select>
-            </label>
-            <s-button type="submit" loading={navigation.state !== "idle" || undefined}>
-              Load translatable content
-            </s-button>
-          </s-stack>
+            </div>
+            <s-button type="submit" loading={navigation.state !== "idle" || undefined}>Load</s-button>
+          </div>
         </Form>
       </s-section>
 
-      {data.gemini.configured ? (
-        <s-section heading="Gemini">
-          <s-paragraph>Model: {data.gemini.model}. <s-link href="/app/settings">Manage settings</s-link></s-paragraph>
-        </s-section>
-      ) : (
-        <s-section heading="Gemini">
-          <s-banner tone="warning">Gemini is not configured. <s-link href="/app/settings">Add an API key in Settings</s-link>.</s-banner>
-        </s-section>
-      )}
-
       {resources.length > 0 && (
         <s-section heading={`Translatable content (${resources.length} loaded)`}>
-          <s-stack direction="block" gap="base">
-            <s-stack direction="inline" gap="small">
-              <input
-                type="search"
-                placeholder="Search by name or content..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.currentTarget.value)}
-                style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
-              />
-              <fetcher.Form method="post" style={{ display: "inline" }}>
-                <input type="hidden" name="intent" value="translateAll" />
-                <input type="hidden" name="resourceType" value={data.resourceType} />
-                <input type="hidden" name="targetLocale" value={data.targetLocale} />
-                <s-button
-                  type="submit"
-                  variant="primary"
-                  loading={translatingAll || busy || undefined}
-                  disabled={!data.gemini.configured || undefined}
-                  onClick={() => setTranslatingAll(true)}
-                >
-                  Translate all with Gemini
-                </s-button>
-              </fetcher.Form>
-            </s-stack>
-            {translatingAll && (
-              <s-banner tone="info">Translating all content... This may take a while for large stores.</s-banner>
-            )}
-            {(() => {
-              const filtered = searchQuery.trim()
-                ? resources.filter((r) => {
-                    const q = searchQuery.toLowerCase();
-                    return r.name.toLowerCase().includes(q) ||
-                      r.translatableContent.some((c) => c.value.toLowerCase().includes(q) || c.key.toLowerCase().includes(q));
-                  })
-                : resources;
-              if (!filtered.length) return <s-paragraph>No resources match your search.</s-paragraph>;
-              return filtered.map((resource) => {
-              const isEditing = editingResource === resource.resourceId;
-              const hasContent = resource.translatableContent.length > 0;
-              return (
-                <s-box key={resource.resourceId} padding="base" borderWidth="base" borderRadius="base">
-                  <s-stack direction="block" gap="small">
-                    <s-stack direction="inline" gap="small">
-                      <s-heading><HighlightText text={resource.name} query={searchQuery} /></s-heading>
-                      <s-badge tone={hasContent ? "info" : "critical"}>
-                        {hasContent ? `${resource.translatableContent.length} fields` : "no content"}
-                      </s-badge>
-                    </s-stack>
+          <div style={TABLE_STYLES.toolbar}>
+            <input
+              type="search"
+              placeholder="Search by name or content..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.currentTarget.value)}
+              style={TABLE_STYLES.searchInput}
+            />
+            <fetcher.Form method="post" style={{ display: "inline" }}>
+              <input type="hidden" name="intent" value="translateAll" />
+              <input type="hidden" name="resourceType" value={data.resourceType} />
+              <input type="hidden" name="targetLocale" value={data.targetLocale} />
+              <s-button
+                type="submit"
+                variant="primary"
+                loading={translatingAll || busy || undefined}
+                disabled={!data.gemini.configured || undefined}
+                onClick={() => setTranslatingAll(true)}
+              >
+                Translate all with AI
+              </s-button>
+            </fetcher.Form>
+          </div>
 
-                    {hasContent && (
-                      <>
-                        <s-stack direction="inline" gap="small">
-                          <s-button
-                            onClick={() => {
-                              if (isEditing) {
-                                setEditingResource(null);
-                              } else {
-                                setEditingResource(resource.resourceId);
-                                setEditValues((prev) => ({
-                                  ...prev,
-                                  [resource.resourceId]: Object.fromEntries(
-                                    resource.translatableContent.map((c) => [c.key, c.value]),
-                                  ),
-                                }));
-                              }
-                            }}
-                          >
-                            {isEditing ? "Close" : "Edit"}
-                          </s-button>
-                          <fetcher.Form method="post" style={{ display: "inline" }}>
-                            <input type="hidden" name="intent" value="translate" />
-                            <input type="hidden" name="resourceId" value={resource.resourceId} />
-                            <input type="hidden" name="targetLocale" value={data.targetLocale} />
-                            <input
-                              type="hidden"
-                              name="keys"
-                              value={resource.translatableContent.map((c) => c.key).join("\n")}
-                            />
-                            <input
-                              type="hidden"
-                              name="sources"
-                              value={resource.translatableContent.map((c) => c.value).join("\n")}
-                            />
-                            <input
-                              type="hidden"
-                              name="digests"
-                              value={resource.translatableContent.map((c) => c.digest).join("\n")}
-                            />
-                            <s-button
-                              type="submit"
-                              loading={busy || undefined}
-                              disabled={!data.gemini.configured || undefined}
-                            >
-                              Translate all with Gemini
-                            </s-button>
-                          </fetcher.Form>
-                        </s-stack>
+          {translatingAll && (
+            <s-banner tone="info">Translating all content... This may take a while.</s-banner>
+          )}
 
-                        {isEditing && (
-                          <fetcher.Form method="post">
-                            <input type="hidden" name="intent" value="save" />
-                            <input type="hidden" name="resourceId" value={resource.resourceId} />
-                            <input type="hidden" name="targetLocale" value={data.targetLocale} />
-                            <input
-                              type="hidden"
-                              name="keys"
-                              value={resource.translatableContent.map((c) => c.key).join("\n")}
-                            />
-                            <input
-                              type="hidden"
-                              name="digests"
-                              value={resource.translatableContent.map((c) => c.digest).join("\n")}
-                            />
-                            <s-stack direction="block" gap="small">
-                              {resource.translatableContent.map((content) => (
-                                <s-box key={content.key} padding="small" borderWidth="base" borderRadius="base">
-                                  <s-stack direction="block" gap="small">
-                                    <s-text><strong>{content.key}</strong></s-text>
-                                    <s-paragraph>{content.value}</s-paragraph>
-                                    <textarea
-                                      value={editValues[resource.resourceId]?.[content.key] ?? ""}
-                                      onChange={(e) =>
+          {(() => {
+            const filtered = searchQuery.trim()
+              ? resources.filter((r) => {
+                  const q = searchQuery.toLowerCase();
+                  return r.name.toLowerCase().includes(q) ||
+                    r.translatableContent.some((c) => c.value.toLowerCase().includes(q) || c.key.toLowerCase().includes(q));
+                })
+              : resources;
+            if (!filtered.length) return <div style={TABLE_STYLES.cardRow}><p style={{ color: "#616161", textAlign: "center" }}>No resources match your search.</p></div>;
+
+            return (
+              <>
+                <p style={{ color: "#616161", fontSize: 13, margin: "12px 0 8px" }}>
+                  Showing {filtered.length} of {resources.length} resources
+                </p>
+                <table style={TABLE_STYLES.table}>
+                  <thead style={TABLE_STYLES.thead}>
+                    <tr>
+                      <th style={{ ...TABLE_STYLES.th, width: "30%" }}>Name</th>
+                      <th style={{ ...TABLE_STYLES.th, width: "10%" }}>Fields</th>
+                      <th style={{ ...TABLE_STYLES.th, width: "40%" }}>Preview</th>
+                      <th style={{ ...TABLE_STYLES.th, width: "20%" }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((resource) => {
+                      const isEditing = editingResource === resource.resourceId;
+                      const hasContent = resource.translatableContent.length > 0;
+                      return (
+                        <>
+                          <tr key={resource.resourceId} style={TABLE_STYLES.trHover}>
+                            <td style={TABLE_STYLES.td}>
+                              <strong style={{ fontSize: 14 }}>
+                                <HighlightText text={resource.name} query={searchQuery} />
+                              </strong>
+                            </td>
+                            <td style={TABLE_STYLES.td}>
+                              {hasContent ? (
+                                <span style={{ ...TABLE_STYLES.badge, ...TABLE_STYLES.badgeInfo }}>
+                                  {resource.translatableContent.length} fields
+                                </span>
+                              ) : (
+                                <span style={{ ...TABLE_STYLES.badge, ...TABLE_STYLES.badgeCritical }}>empty</span>
+                              )}
+                            </td>
+                            <td style={{ ...TABLE_STYLES.td, fontSize: 13, color: "#444" }}>
+                              {hasContent ? (
+                                <HighlightText
+                                  text={resource.translatableContent[0].value.slice(0, 80) + (resource.translatableContent[0].value.length > 80 ? "..." : "")}
+                                  query={searchQuery}
+                                />
+                              ) : "—"}
+                            </td>
+                            <td style={TABLE_STYLES.td}>
+                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                {hasContent && (
+                                  <s-button
+                                    onClick={() => {
+                                      if (isEditing) {
+                                        setEditingResource(null);
+                                      } else {
+                                        setEditingResource(resource.resourceId);
                                         setEditValues((prev) => ({
                                           ...prev,
-                                          [resource.resourceId]: {
-                                            ...prev[resource.resourceId],
-                                            [content.key]: (e.currentTarget as unknown as HTMLTextAreaElement).value,
-                                          },
-                                        }))
+                                          [resource.resourceId]: Object.fromEntries(
+                                            resource.translatableContent.map((c) => [c.key, c.value]),
+                                          ),
+                                        }));
                                       }
-                                      rows={3}
-                                      placeholder={`Translation in ${data.targetLocale}...`}
-                                      style={{ width: "100%", padding: 10, resize: "vertical" }}
-                                    />
-                                  </s-stack>
-                                </s-box>
-                              ))}
-                              <input
-                                type="hidden"
-                                name="values"
-                                value={resource.translatableContent
-                                  .map((c) => editValues[resource.resourceId]?.[c.key] ?? "")
-                                  .join("\n")}
-                              />
-                              <s-button type="submit" variant="primary" loading={busy || undefined}>
-                                Save translations
-                              </s-button>
-                            </s-stack>
-                          </fetcher.Form>
-                        )}
-
-                        {!isEditing && (
-                          <s-stack direction="block" gap="small">
-                            {resource.translatableContent.slice(0, 3).map((content) => (
-                              <s-box key={content.key} padding="small" borderWidth="base" borderRadius="base">
-                                <s-stack direction="block" gap="small">
-                                  <s-text><strong><HighlightText text={content.key} query={searchQuery} /></strong></s-text>
-                                  <s-paragraph><HighlightText text={content.value.slice(0, 200) + (content.value.length > 200 ? "..." : "")} query={searchQuery} /></s-paragraph>
-                                </s-stack>
-                              </s-box>
-                            ))}
-                            {resource.translatableContent.length > 3 && (
-                              <s-paragraph>{resource.translatableContent.length - 3} more field(s) — click Edit to see all</s-paragraph>
-                            )}
-                          </s-stack>
-                        )}
-                      </>
-                    )}
-                  </s-stack>
-                </s-box>
-              );
-            });
-            })()}
-            {hasMore && (
-              <s-button onClick={loadMore} loading={moreFetcher.state !== "idle" || undefined}>
-                Load more
-              </s-button>
-            )}
-          </s-stack>
+                                    }}
+                                  >
+                                    {isEditing ? "Close" : "Edit"}
+                                  </s-button>
+                                )}
+                                {hasContent && (
+                                  <fetcher.Form method="post" style={{ display: "inline" }}>
+                                    <input type="hidden" name="intent" value="translate" />
+                                    <input type="hidden" name="resourceId" value={resource.resourceId} />
+                                    <input type="hidden" name="targetLocale" value={data.targetLocale} />
+                                    <input type="hidden" name="keys" value={resource.translatableContent.map((c) => c.key).join("\n")} />
+                                    <input type="hidden" name="sources" value={resource.translatableContent.map((c) => c.value).join("\n")} />
+                                    <input type="hidden" name="digests" value={resource.translatableContent.map((c) => c.digest).join("\n")} />
+                                    <s-button type="submit" loading={busy || undefined} disabled={!data.gemini.configured || undefined}>
+                                      AI
+                                    </s-button>
+                                  </fetcher.Form>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                          {isEditing && hasContent && (
+                            <tr key={`${resource.resourceId}-edit`}>
+                              <td colSpan={4} style={{ ...TABLE_STYLES.td, background: "#fafafa" }}>
+                                <fetcher.Form method="post">
+                                  <input type="hidden" name="intent" value="save" />
+                                  <input type="hidden" name="resourceId" value={resource.resourceId} />
+                                  <input type="hidden" name="targetLocale" value={data.targetLocale} />
+                                  <input type="hidden" name="keys" value={resource.translatableContent.map((c) => c.key).join("\n")} />
+                                  <input type="hidden" name="digests" value={resource.translatableContent.map((c) => c.digest).join("\n")} />
+                                  <table style={TABLE_STYLES.table}>
+                                    <thead style={TABLE_STYLES.thead}>
+                                      <tr>
+                                        <th style={{ ...TABLE_STYLES.th, width: "20%" }}>Field</th>
+                                        <th style={{ ...TABLE_STYLES.th, width: "35%" }}>Source</th>
+                                        <th style={{ ...TABLE_STYLES.th, width: "35%" }}>Translation</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {resource.translatableContent.map((content) => (
+                                        <tr key={content.key}>
+                                          <td style={TABLE_STYLES.td}><strong style={{ fontSize: 13 }}>{content.key}</strong></td>
+                                          <td style={{ ...TABLE_STYLES.td, fontSize: 13, color: "#444" }}>{content.value.slice(0, 200)}{content.value.length > 200 ? "..." : ""}</td>
+                                          <td style={TABLE_STYLES.td}>
+                                            <textarea
+                                              value={editValues[resource.resourceId]?.[content.key] ?? ""}
+                                              onChange={(e) =>
+                                                setEditValues((prev) => ({
+                                                  ...prev,
+                                                  [resource.resourceId]: {
+                                                    ...prev[resource.resourceId],
+                                                    [content.key]: (e.currentTarget as unknown as HTMLTextAreaElement).value,
+                                                  },
+                                                }))
+                                              }
+                                              rows={2}
+                                              placeholder={`Translation in ${data.targetLocale}...`}
+                                              style={TABLE_STYLES.textarea}
+                                            />
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                  <input
+                                    type="hidden"
+                                    name="values"
+                                    value={resource.translatableContent
+                                      .map((c) => editValues[resource.resourceId]?.[c.key] ?? "")
+                                      .join("\n")}
+                                  />
+                                  <div style={{ marginTop: 8 }}>
+                                    <s-button type="submit" variant="primary" loading={busy || undefined}>
+                                      Save translations
+                                    </s-button>
+                                  </div>
+                                </fetcher.Form>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {hasMore && (
+                  <div style={{ textAlign: "center", marginTop: 12 }}>
+                    <s-button onClick={loadMore} loading={moreFetcher.state !== "idle" || undefined}>
+                      Load more
+                    </s-button>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </s-section>
       )}
 

@@ -8,6 +8,7 @@ import { Form, useFetcher, useLoaderData, useNavigation, useRevalidator } from "
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { HighlightText } from "../components/HighlightText";
+import { TABLE_STYLES } from "../components/tableStyles";
 import prisma from "../db.server";
 import { isRetryableGeminiError, translateBatch } from "../lib/gemini.server";
 import { getShopGeminiConfiguration } from "../lib/gemini-settings.server";
@@ -548,94 +549,171 @@ export default function TranslatorDashboard() {
     }, { method: "post" });
   };
 
+  const statusBadge = (status: string) => {
+    const styles = status === "translated" ? TABLE_STYLES.badgeSuccess
+      : status === "stale" ? TABLE_STYLES.badgeWarning
+      : TABLE_STYLES.badgeCritical;
+    return <span style={{ ...TABLE_STYLES.badge, ...styles }}>{status}</span>;
+  };
+
   return (
-    <s-page heading="Locale translator">
+    <s-page heading="Locale files">
       <s-button
         slot="primary-action"
         onClick={() => fetcher.submit({ intent: "refresh" }, { method: "post" })}
         loading={busy || undefined}
       >
-        Refresh / sync
+        Refresh
       </s-button>
 
-      <s-section heading="Gemini configuration">
-        {data.gemini.configured ? (
-          <s-paragraph>Configured model: {data.gemini.model}. <s-link href="/app/settings">Manage settings</s-link></s-paragraph>
-        ) : (
-          <s-banner tone="warning">Gemini is not configured. <s-link href="/app/settings">Add an API key in Settings</s-link>.</s-banner>
-        )}
-      </s-section>
+      {!data.gemini.configured && (
+        <s-banner tone="warning">
+          Gemini is not configured. <s-link href="/app/settings">Add an API key in Settings</s-link>.
+        </s-banner>
+      )}
 
+      {/* Workspace selector */}
       <s-section heading="Translation workspace">
         <Form method="get">
-          <s-stack direction="block" gap="base">
-            <label>
-              <s-text>Theme</s-text>
-              <select name="theme" defaultValue={selection?.themeId || ""} required style={{ display: "block", width: "100%", padding: 10, marginTop: 6 }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Theme</label>
+              <select name="theme" defaultValue={selection?.themeId || ""} required style={TABLE_STYLES.select}>
                 <option value="">Select a theme</option>
                 {data.themes.map((theme) => <option key={theme.id} value={theme.id}>{theme.name} ({theme.role})</option>)}
               </select>
-            </label>
-            <label>
-              <s-text>Source locale file</s-text>
-              <select name="source" defaultValue={selection?.sourceFilename || ""} style={{ display: "block", width: "100%", padding: 10, marginTop: 6 }}>
+            </div>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Source file</label>
+              <select name="source" defaultValue={selection?.sourceFilename || ""} style={TABLE_STYLES.select}>
                 <option value="">Select a locale file</option>
                 {data.files.map((filename) => <option key={filename} value={filename}>{filename}</option>)}
               </select>
-            </label>
-            <label>
-              <s-text>Target language</s-text>
-              <select name="target" defaultValue={selection?.targetLocale || ""} style={{ display: "block", width: "100%", padding: 10, marginTop: 6 }}>
-                <option value="">Select a target language</option>
-                {data.shopLocales.map((locale) => <option key={locale.locale} value={locale.locale}>{locale.name} ({locale.locale}){locale.published ? " — published" : ""}</option>)}
+            </div>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Target language</label>
+              <select name="target" defaultValue={selection?.targetLocale || ""} style={TABLE_STYLES.select}>
+                <option value="">Select target</option>
+                {data.shopLocales.map((locale) => <option key={locale.locale} value={locale.locale}>{locale.name} ({locale.locale}){locale.published ? "" : " — unpublished"}</option>)}
               </select>
-            </label>
-            <s-button type="submit" loading={navigation.state !== "idle" || undefined}>Open workspace</s-button>
-          </s-stack>
+            </div>
+            <s-button type="submit" loading={navigation.state !== "idle" || undefined}>Open</s-button>
+          </div>
         </Form>
       </s-section>
 
       {selection && (
         <>
-          <s-section heading="Progress">
-            <s-stack direction="inline" gap="base">
-              <s-badge tone="success">Translated: {counts.translated ?? 0}</s-badge>
-              <s-badge tone="warning">Stale: {counts.stale ?? 0}</s-badge>
-              <s-badge tone="critical">Missing: {counts.missing ?? 0}</s-badge>
-            </s-stack>
-            <s-paragraph>
-              Last sync: {new Date(selection.lastSyncedAt).toLocaleString()}. Last update: {new Date(selection.lastUpdatedAt).toLocaleString()}. Target file: {selection.targetFilename}
-            </s-paragraph>
-            {job && (
-              <s-box padding="base" borderWidth="base" borderRadius="base">
-                <s-stack direction="block" gap="small">
-                  <s-heading>Bulk translation job</s-heading>
-                  <progress value={job.completedItems} max={Math.max(job.totalItems, 1)} style={{ width: "100%" }} aria-label="Translation progress" />
-                  <s-paragraph>
-                    {job.completedItems} / {job.totalItems} ({percentage}%) · Status: {job.status} · Model: {job.model}
-                  </s-paragraph>
-                  <s-paragraph>
-                    Tokens — prompt: {job.promptTokenCount}, candidates: {job.candidatesTokenCount}, thoughts: {job.thoughtsTokenCount}, total: {job.totalTokenCount}
-                  </s-paragraph>
-                  {job.error && <s-banner tone="critical">{job.error}</s-banner>}
-                </s-stack>
-              </s-box>
-            )}
-            <s-stack direction="inline" gap="base">
-              {(!job || job.status === "completed") && (
-                <s-button onClick={() => submitJob("startJob")} loading={busy || undefined} disabled={!data.gemini.configured || undefined}>
-                  Start translation
+          {/* Stats row */}
+          <s-section>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <div style={TABLE_STYLES.statCard}>
+                <p style={TABLE_STYLES.statNumber}>{counts.translated ?? 0}</p>
+                <p style={TABLE_STYLES.statLabel}>Translated</p>
+              </div>
+              <div style={TABLE_STYLES.statCard}>
+                <p style={TABLE_STYLES.statNumber}>{counts.stale ?? 0}</p>
+                <p style={TABLE_STYLES.statLabel}>Stale</p>
+              </div>
+              <div style={TABLE_STYLES.statCard}>
+                <p style={TABLE_STYLES.statNumber}>{counts.missing ?? 0}</p>
+                <p style={TABLE_STYLES.statLabel}>Missing</p>
+              </div>
+              <div style={TABLE_STYLES.statCard}>
+                <p style={TABLE_STYLES.statNumber}>{Object.keys(selection.source).length}</p>
+                <p style={TABLE_STYLES.statLabel}>Total</p>
+              </div>
+            </div>
+          </s-section>
+
+          {/* Job progress + actions */}
+          {job && (
+            <s-section heading="Bulk translation job">
+              <div style={TABLE_STYLES.cardRow}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <strong>{job.status}</strong>
+                  <span style={{ color: "#616161", fontSize: 13 }}>{job.completedItems} / {job.totalItems} ({percentage}%) · {job.model}</span>
+                </div>
+                <div style={TABLE_STYLES.progressBar}>
+                  <div style={TABLE_STYLES.progressFill(percentage)} />
+                </div>
+                {job.error && <s-banner tone="critical">{job.error}</s-banner>}
+                <div style={{ display: "flex", gap: 8, marginTop: 12, fontSize: 12, color: "#616161" }}>
+                  <span>Tokens: {job.totalTokenCount}</span>
+                  <span>·</span>
+                  <span>Prompt: {job.promptTokenCount}</span>
+                  <span>·</span>
+                  <span>Candidates: {job.candidatesTokenCount}</span>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                {(!job || job.status === "completed") && (
+                  <s-button onClick={() => submitJob("startJob")} loading={busy || undefined} disabled={!data.gemini.configured || undefined}>
+                    Start bulk translation
+                  </s-button>
+                )}
+                {job && ["pending", "active"].includes(job.status) && (
+                  <s-button onClick={() => submitJob("processJob")} loading={busy || undefined}>Continue</s-button>
+                )}
+                {job?.status === "paused" && (
+                  <s-button onClick={() => submitJob("resumeJob")} loading={busy || undefined}>Continue</s-button>
+                )}
+                {job?.status === "failed" && (
+                  <s-button onClick={() => submitJob("resumeJob")} loading={busy || undefined}>Retry</s-button>
+                )}
+              </div>
+            </s-section>
+          )}
+
+          {/* Strings table */}
+          <s-section heading="Strings">
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+              <button style={TABLE_STYLES.tabButton(activeTab === "missing")} onClick={() => setActiveTab("missing")}>
+                Missing ({counts.missing ?? 0})
+              </button>
+              <button style={TABLE_STYLES.tabButton(activeTab === "stale")} onClick={() => setActiveTab("stale")}>
+                Stale ({counts.stale ?? 0})
+              </button>
+              <button style={TABLE_STYLES.tabButton(activeTab === "translated")} onClick={() => setActiveTab("translated")}>
+                Translated ({counts.translated ?? 0})
+              </button>
+              <button style={TABLE_STYLES.tabButton(activeTab === "all")} onClick={() => setActiveTab("all")}>
+                All ({Object.keys(selection.source).length})
+              </button>
+            </div>
+
+            <div style={TABLE_STYLES.toolbar}>
+              <input
+                type="search"
+                placeholder="Search by key or source text..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.currentTarget.value)}
+                style={TABLE_STYLES.searchInput}
+              />
+              <fetcher.Form method="post" style={{ display: "inline" }}>
+                <input type="hidden" name="intent" value="translateAllVisible" />
+                <input type="hidden" name="themeId" value={selection.themeId} />
+                <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
+                <input type="hidden" name="targetLocale" value={selection.targetLocale} />
+                <input
+                  type="hidden"
+                  name="keysToTranslate"
+                  value={Object.entries(selection.source)
+                    .filter(([key]) => {
+                      if (activeTab !== "all" && selection.statuses[key] !== activeTab) return false;
+                      if (searchQuery.trim()) {
+                        const q = searchQuery.toLowerCase();
+                        return key.toLowerCase().includes(q) || selection.source[key].toLowerCase().includes(q);
+                      }
+                      return true;
+                    })
+                    .map(([key]) => key)
+                    .join("\n")}
+                />
+                <s-button type="submit" variant="primary" loading={busy || undefined} disabled={!data.gemini.configured || undefined}>
+                  Translate all visible
                 </s-button>
-              )}
-              {job && ["pending", "active"].includes(job.status) && (
-                <s-button onClick={() => submitJob("processJob")} loading={busy || undefined}>Continue</s-button>
-              )}
-              {job?.status === "paused" && (
-                <s-button onClick={() => submitJob("resumeJob")} loading={busy || undefined}>Continue</s-button>
-              )}
-              {job?.status === "failed" && (
-                <s-button onClick={() => submitJob("resumeJob")} loading={busy || undefined}>Retry</s-button>
-              )}
+              </fetcher.Form>
               <s-button
                 onClick={() => fetcher.submit({
                   intent: "publish",
@@ -648,147 +726,116 @@ export default function TranslatorDashboard() {
               >
                 Publish to Shopify
               </s-button>
-            </s-stack>
-          </s-section>
+            </div>
 
-          <s-section heading="Strings">
-            <s-stack direction="block" gap="base">
-              <s-stack direction="inline" gap="small">
-                <s-button
-                  variant={activeTab === "missing" ? "primary" : "secondary"}
-                  onClick={() => setActiveTab("missing")}
-                >
-                  Missing ({counts.missing ?? 0})
-                </s-button>
-                <s-button
-                  variant={activeTab === "stale" ? "primary" : "secondary"}
-                  onClick={() => setActiveTab("stale")}
-                >
-                  Stale ({counts.stale ?? 0})
-                </s-button>
-                <s-button
-                  variant={activeTab === "translated" ? "primary" : "secondary"}
-                  onClick={() => setActiveTab("translated")}
-                >
-                  Translated ({counts.translated ?? 0})
-                </s-button>
-                <s-button
-                  variant={activeTab === "all" ? "primary" : "secondary"}
-                  onClick={() => setActiveTab("all")}
-                >
-                  All ({Object.keys(selection.source).length})
-                </s-button>
-              </s-stack>
-              <s-stack direction="inline" gap="small">
-                <input
-                  type="search"
-                  placeholder="Search by key or source text..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.currentTarget.value)}
-                  style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
-                />
-                <fetcher.Form method="post">
-                  <input type="hidden" name="intent" value="translateAllVisible" />
-                  <input type="hidden" name="themeId" value={selection.themeId} />
-                  <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
-                  <input type="hidden" name="targetLocale" value={selection.targetLocale} />
-                  <input
-                    type="hidden"
-                    name="keysToTranslate"
-                    value={Object.entries(selection.source)
-                      .filter(([key]) => {
-                        if (activeTab !== "all" && selection.statuses[key] !== activeTab) return false;
-                        if (searchQuery.trim()) {
-                          const q = searchQuery.toLowerCase();
-                          return key.toLowerCase().includes(q) || selection.source[key].toLowerCase().includes(q);
-                        }
-                        return true;
-                      })
-                      .map(([key]) => key)
-                      .join("\n")}
-                  />
-                  <s-button
-                    type="submit"
-                    variant="primary"
-                    loading={busy || undefined}
-                    disabled={!data.gemini.configured || undefined}
-                  >
-                    Translate all visible
-                  </s-button>
-                </fetcher.Form>
-              </s-stack>
-              {(() => {
-                const entries = Object.entries(selection.source).filter(([key, source]) => {
-                  if (activeTab !== "all" && selection.statuses[key] !== activeTab) return false;
-                  if (searchQuery.trim()) {
-                    const q = searchQuery.toLowerCase();
-                    return key.toLowerCase().includes(q) || source.toLowerCase().includes(q);
-                  }
-                  return true;
-                });
-                if (!entries.length) {
-                  return <s-box padding="base" borderWidth="base" borderRadius="base"><s-paragraph>No strings match this filter.</s-paragraph></s-box>;
+            {(() => {
+              const entries = Object.entries(selection.source).filter(([key, source]) => {
+                if (activeTab !== "all" && selection.statuses[key] !== activeTab) return false;
+                if (searchQuery.trim()) {
+                  const q = searchQuery.toLowerCase();
+                  return key.toLowerCase().includes(q) || source.toLowerCase().includes(q);
                 }
-                const visible = entries.slice(0, visibleCount);
-                return (
-                  <>
-                    <s-paragraph>Showing {visible.length} of {entries.length} strings</s-paragraph>
-                    {visible.map(([key, source]) => {
-                  const currentValue = translationOverrides[key] ?? selection.target[key] ?? "";
-                  return (
-                    <s-box key={key} padding="base" borderWidth="base" borderRadius="base">
-                      <fetcher.Form method="post">
-                        <input type="hidden" name="themeId" value={selection.themeId} />
-                        <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
-                        <input type="hidden" name="targetLocale" value={selection.targetLocale} />
-                        <input type="hidden" name="key" value={key} />
-                        <input type="hidden" name="intent" value="save" />
-                        <s-stack direction="block" gap="small">
-                          <s-stack direction="inline" gap="small">
-                            <s-heading><HighlightText text={key} query={searchQuery} /></s-heading>
-                            <s-badge tone={selection.statuses[key] === "translated" ? "success" : selection.statuses[key] === "stale" ? "warning" : "critical"}>{selection.statuses[key]}</s-badge>
-                          </s-stack>
-                          <s-paragraph><HighlightText text={source} query={searchQuery} /></s-paragraph>
-                          <textarea
-                            name="translation"
-                            value={currentValue}
-                            onChange={(e) => setTranslationOverrides((prev) => ({ ...prev, [key]: e.currentTarget.value }))}
-                            rows={3}
-                            aria-label={`Translation for ${key}`}
-                            style={{ width: "100%", padding: 10, resize: "vertical" }}
-                          />
-                          <s-stack direction="inline" gap="small">
-                            <s-button type="submit" loading={busy || undefined}>Save</s-button>
-                            <s-button
-                              onClick={() => {
-                                fetcher.submit({
-                                  intent: "translate",
-                                  themeId: selection.themeId,
-                                  sourceFilename: selection.sourceFilename,
-                                  targetLocale: selection.targetLocale,
-                                  key,
-                                }, { method: "post" });
-                              }}
-                              loading={busy || undefined}
-                              disabled={!data.gemini.configured || undefined}
-                            >
-                              Translate with Gemini
-                            </s-button>
-                          </s-stack>
-                        </s-stack>
-                      </fetcher.Form>
-                    </s-box>
-                  );
-                })}
-                    {visibleCount < entries.length && (
+                return true;
+              });
+              if (!entries.length) {
+                return <div style={TABLE_STYLES.cardRow}><p style={{ color: "#616161", textAlign: "center" }}>No strings match this filter.</p></div>;
+              }
+              const visible = entries.slice(0, visibleCount);
+              return (
+                <>
+                  <p style={{ color: "#616161", fontSize: 13, margin: "12px 0 8px" }}>
+                    Showing {visible.length} of {entries.length} strings
+                  </p>
+                  <table style={TABLE_STYLES.table}>
+                    <thead style={TABLE_STYLES.thead}>
+                      <tr>
+                        <th style={{ ...TABLE_STYLES.th, width: "25%" }}>Key</th>
+                        <th style={{ ...TABLE_STYLES.th, width: "25%" }}>Source</th>
+                        <th style={{ ...TABLE_STYLES.th, width: "30%" }}>Translation</th>
+                        <th style={{ ...TABLE_STYLES.th, width: "8%" }}>Status</th>
+                        <th style={{ ...TABLE_STYLES.th, width: "12%" }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visible.map(([key, source]) => {
+                        const currentValue = translationOverrides[key] ?? selection.target[key] ?? "";
+                        return (
+                          <tr key={key}>
+                            <td style={TABLE_STYLES.td}>
+                              <strong style={{ fontSize: 13, wordBreak: "break-all" }}>
+                                <HighlightText text={key} query={searchQuery} />
+                              </strong>
+                            </td>
+                            <td style={{ ...TABLE_STYLES.td, fontSize: 13, color: "#444" }}>
+                              <HighlightText text={source} query={searchQuery} />
+                            </td>
+                            <td style={TABLE_STYLES.td}>
+                              <fetcher.Form method="post">
+                                <input type="hidden" name="themeId" value={selection.themeId} />
+                                <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
+                                <input type="hidden" name="targetLocale" value={selection.targetLocale} />
+                                <input type="hidden" name="key" value={key} />
+                                <input type="hidden" name="intent" value="save" />
+                                <textarea
+                                  name="translation"
+                                  value={currentValue}
+                                  onChange={(e) => setTranslationOverrides((prev) => ({ ...prev, [key]: e.currentTarget.value }))}
+                                  rows={2}
+                                  aria-label={`Translation for ${key}`}
+                                  style={TABLE_STYLES.textarea}
+                                />
+                              </fetcher.Form>
+                            </td>
+                            <td style={TABLE_STYLES.td}>{statusBadge(selection.statuses[key])}</td>
+                            <td style={TABLE_STYLES.td}>
+                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                <s-button
+                                  onClick={() => {
+                                    fetcher.submit({
+                                      intent: "save",
+                                      themeId: selection.themeId,
+                                      sourceFilename: selection.sourceFilename,
+                                      targetLocale: selection.targetLocale,
+                                      key,
+                                      translation: currentValue,
+                                    }, { method: "post" });
+                                  }}
+                                  loading={busy || undefined}
+                                >
+                                  Save
+                                </s-button>
+                                <s-button
+                                  onClick={() => {
+                                    fetcher.submit({
+                                      intent: "translate",
+                                      themeId: selection.themeId,
+                                      sourceFilename: selection.sourceFilename,
+                                      targetLocale: selection.targetLocale,
+                                      key,
+                                    }, { method: "post" });
+                                  }}
+                                  loading={busy || undefined}
+                                  disabled={!data.gemini.configured || undefined}
+                                >
+                                  AI
+                                </s-button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {visibleCount < entries.length && (
+                    <div style={{ textAlign: "center", marginTop: 12 }}>
                       <s-button onClick={() => setVisibleCount((c) => c + (data.lazyLoadPageSize ?? 20))}>
                         Load more ({entries.length - visibleCount} remaining)
                       </s-button>
-                    )}
-                  </>
-                );
-              })()}
-            </s-stack>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </s-section>
         </>
       )}
