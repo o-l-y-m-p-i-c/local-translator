@@ -391,7 +391,7 @@ function dedupeByLocale(content: TranslatableContent[]): TranslatableContent[] {
 type TranslationsRegisterData = {
   translationsRegister: {
     translations: Array<{ key: string; value: string }>;
-    userErrors: Array<{ message: string; key: string }>;
+    userErrors: Array<{ message: string; field: string[] }>;
   };
 };
 
@@ -412,7 +412,7 @@ export async function registerTranslations(
       ) {
         translationsRegister(resourceId: $resourceId, translations: $translations) {
           translations { key value }
-          userErrors { message key }
+          userErrors { message field }
         }
       }`,
     {
@@ -428,6 +428,6 @@ export async function registerTranslations(
 
   return {
     registered: data.translationsRegister.translations.length,
-    errors: data.translationsRegister.userErrors.map((e) => `${e.key}: ${e.message}`),
+    errors: data.translationsRegister.userErrors.map((e) => `${e.field.join(".")}: ${e.message}`),
   };
 }
