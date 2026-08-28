@@ -69,6 +69,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const themeId = url.searchParams.get("theme") || "";
   const targetLocale = url.searchParams.get("target") || "";
+
+  // Redirect to Languages page when visiting /app without a view param
+  if (!url.searchParams.has("view") && !themeId && !targetLocale) {
+    throw new Response(null, {
+      status: 302,
+      headers: { Location: "/app/languages" },
+    });
+  }
   console.log("[loader] shop:", session.shop, "theme:", themeId, "target:", targetLocale);
   let dashboard, settings;
   try {

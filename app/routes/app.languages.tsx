@@ -62,12 +62,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { ok: true, message: `Cancelled translation jobs for ${targetLocale}` };
   }
 
-  if (intent === "translateFull" || intent === "translateCategory") {
+  if (intent === "translateFull" || intent === "translateCategory" || intent === "forceTranslate" || intent === "translateMissing") {
     const { getShopGeminiConfiguration } = await import("../lib/gemini-settings.server");
     const configuration = await getShopGeminiConfiguration(session.shop);
     if (!configuration) throw new Error("Configure a Gemini API key in Settings first");
 
-    const typesToTranslate = intent === "translateFull"
+    const isFull = intent === "translateFull" || intent === "forceTranslate" || intent === "translateMissing";
+    const typesToTranslate = isFull
       ? ALL_RESOURCE_TYPES
       : resourceType ? [resourceType] : [];
 
@@ -75,11 +76,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ ok: false, message: "No resource type specified" }, { status: 400 });
     }
 
+    // forceTranslate = re-translate everything (mode: "force")
+    // translateMissing = only translate fields with no existing translation (mode: "missing")
+    // translateFull/translateCategory = translate everything (mode: "all", same as force but semantically "first pass")
+    const mode: "all" | "force" | "missing" =
+      intent === "forceTranslate" ? "force" :
+      intent === "translateMissing" ? "missing" : "all";
+
+    const jobLabel = intent === "forceTranslate" ? "ALL_FORCE" :
+      intent === "translateMissing" ? "ALL_MISSING" :
+      intent === "translateFull" ? "ALL" : resourceType;
+
     const job = await prisma.contentTranslationJob.create({
       data: {
         shop: session.shop,
         targetLocale,
-        resourceType: intent === "translateFull" ? "ALL" : resourceType,
+        resourceType: jobLabel,
         status: "active",
         totalItems: typesToTranslate.length,
         completedItems: 0,
@@ -88,7 +100,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     // Start translation in the background
-    translateResources(admin, session.shop, targetLocale, typesToTranslate, configuration.apiKey, configuration.model, job.id)
+    translateResources(admin, session.shop, targetLocale, typesToTranslate, configuration.apiKey, configuration.model, job.id, mode)
       .catch((error) => {
         console.error("[translate] background error:", error);
         prisma.contentTranslationJob.update({
@@ -97,7 +109,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }).catch(() => {});
       });
 
-    const label = intent === "translateFull" ? "full store" : RESOURCE_LABELS[resourceType] || resourceType;
+    const label = intent === "forceTranslate" ? "full store (force re-translate)"
+      : intent === "translateMissing" ? "missing content"
+      : intent === "translateFull" ? "full store"
+      : RESOURCE_LABELS[resourceType] || resourceType;
     return { ok: true, message: `Started translation of ${label} to ${targetLocale}` };
   }
 
@@ -112,10 +127,12 @@ async function translateResources(
   apiKey: string,
   model: string,
   jobId: string,
+  mode: "all" | "force" | "missing" = "all",
 ) {
   const { getTranslatableResources, registerTranslations } = await import("../lib/shopify-translations.server");
   const { translateBatch } = await import("../lib/gemini.server");
   let completed = 0;
+  let totalSkipped = 0;
 
   for (const resourceType of resourceTypes) {
     const job = await prisma.contentTranslationJob.findUnique({ where: { id: jobId } });
@@ -128,10 +145,29 @@ async function translateResources(
         const result = await getTranslatableResources(admin, resourceType as never, cursor, 10);
         for (const resource of result.resources) {
           if (!resource.translatableContent.length) continue;
+
+          // In "missing" mode, skip fields that already have a translation in the target locale
+          let fieldsToTranslate = resource.translatableContent;
+          if (mode === "missing") {
+            fieldsToTranslate = resource.translatableContent.filter((c) => {
+              // A field is "missing" if the translatable content's value for the target locale is empty
+              // or if the locale field doesn't match the target locale (meaning no translation exists)
+              const targetTranslation = resource.translatableContent.find(
+                (tc) => tc.key === c.key && tc.locale === targetLocale && tc.value.trim()
+              );
+              return !targetTranslation;
+            });
+          }
+
+          if (!fieldsToTranslate.length) {
+            totalSkipped++;
+            continue;
+          }
+
           try {
-            const items = resource.translatableContent.map((c) => ({ key: c.key, source: c.value }));
+            const items = fieldsToTranslate.map((c) => ({ key: c.key, source: c.value }));
             const geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model);
-            const translations = resource.translatableContent.map((c) => ({
+            const translations = fieldsToTranslate.map((c) => ({
               key: c.key,
               value: geminiResult.translations[c.key] || "",
               digest: c.digest,
@@ -190,7 +226,10 @@ export default function LanguagesPage() {
     data.jobs.map((j) => [`${j.targetLocale}:${j.resourceType}`, j]),
   );
   const getJob = (locale: string, resourceType: string) =>
-    jobByKey.get(`${locale}:${resourceType}`) || jobByKey.get(`${locale}:ALL`);
+    jobByKey.get(`${locale}:${resourceType}`) ||
+    jobByKey.get(`${locale}:ALL`) ||
+    jobByKey.get(`${locale}:ALL_FORCE`) ||
+    jobByKey.get(`${locale}:ALL_MISSING`);
 
   const statusBadge = (status: string | undefined) => {
     if (!status) return <span style={{ ...TABLE_STYLES.badge, ...TABLE_STYLES.badgeNeutral }}>Not started</span>;
@@ -267,13 +306,22 @@ export default function LanguagesPage() {
                     <td style={TABLE_STYLES.td}>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         {!isActive && !anyCategoryActive && (
-                          <fetcher.Form method="post" style={{ display: "inline" }}>
-                            <input type="hidden" name="intent" value="translateFull" />
-                            <input type="hidden" name="targetLocale" value={lang.locale} />
-                            <s-button type="submit" variant="primary" loading={busy || undefined}>
-                              Translate full
-                            </s-button>
-                          </fetcher.Form>
+                          <>
+                            <fetcher.Form method="post" style={{ display: "inline" }}>
+                              <input type="hidden" name="intent" value="translateMissing" />
+                              <input type="hidden" name="targetLocale" value={lang.locale} />
+                              <s-button type="submit" variant="primary" loading={busy || undefined}>
+                                Translate missing
+                              </s-button>
+                            </fetcher.Form>
+                            <fetcher.Form method="post" style={{ display: "inline" }}>
+                              <input type="hidden" name="intent" value="forceTranslate" />
+                              <input type="hidden" name="targetLocale" value={lang.locale} />
+                              <s-button type="submit" loading={busy || undefined}>
+                                Force translate
+                              </s-button>
+                            </fetcher.Form>
+                          </>
                         )}
                         {(isActive || anyCategoryActive) && (
                           <fetcher.Form method="post" style={{ display: "inline" }}>
