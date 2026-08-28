@@ -30,7 +30,40 @@ const RESPONSE_SCHEMA = {
 } as const;
 
 function promptFor(items: TranslationItem[], sourceLocale: string, targetLocale: string) {
-  return `Translate Shopify theme locale strings from ${sourceLocale} to ${targetLocale}. Return every key exactly once. Preserve all Liquid expressions, {{ placeholders }}, %{placeholders}, HTML tags, whitespace meaning, and brand names. Do not translate keys.\n\n${JSON.stringify(items)}`;
+  const sourceName = localeDisplayName(sourceLocale);
+  const targetName = localeDisplayName(targetLocale);
+  return `You are a professional translator working on locale files for a Shopify e-commerce store.
+
+Context:
+- Source language: ${sourceName} (${sourceLocale})
+- Target language: ${targetName} (${targetLocale})
+- Platform: Shopify online store theme
+- File type: JSON locale file used for storefront translations
+
+Rules:
+1. Translate each string from ${sourceName} to ${targetName}.
+2. Return every key exactly once, using the same key in the response.
+3. Preserve ALL Liquid expressions exactly: {{ }}, {% %}, {{- -}} tokens.
+4. Preserve ALL placeholder tokens: {{ count }}, {{ product_title }}, %{placeholder}, etc.
+5. Preserve ALL HTML tags and attributes exactly as they appear.
+6. Preserve brand names, product names, and proper nouns (do not translate them).
+7. Keep whitespace and special characters meaningful to the layout.
+8. Do NOT translate the keys — only the values.
+9. Adapt tone for e-commerce: natural, concise, customer-friendly ${targetName}.
+10. For pluralization keys (e.g. "one"/"other"), translate appropriately for the target language's plural rules.
+
+Strings to translate:
+${JSON.stringify(items)}`;
+}
+
+function localeDisplayName(locale: string): string {
+  try {
+    const display = new Intl.DisplayNames(["en"], { type: "language" });
+    const code = locale.replace(/\.default$/, "").replace(/\.schema$/, "");
+    return display.of(code) || locale;
+  } catch {
+    return locale;
+  }
 }
 
 export async function translateBatch(

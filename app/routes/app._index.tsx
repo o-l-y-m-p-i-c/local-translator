@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -234,7 +234,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         where: { id: workspace.id },
         data: { targetSnapshot: JSON.stringify(target), statusSnapshot: JSON.stringify(statuses) },
       });
-      return { ok: true, message: intent === "translate" ? "Translation generated" : "Translation saved" };
+      return { ok: true, message: intent === "translate" ? "Translation generated" : "Translation saved", key, translation };
     }
 
     if (intent === "startJob") {
@@ -434,10 +434,33 @@ export default function TranslatorDashboard() {
     : null;
   const job = fetcherJob ?? selection?.job ?? null;
   const refreshedJob = useRef<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"all" | "missing" | "stale" | "translated">("missing");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [translationOverrides, setTranslationOverrides] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (fetcher.data?.message) shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
   }, [fetcher.data, shopify]);
+
+  // After a successful translate action, update the input and revalidate.
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.ok) {
+      const d = fetcher.data as { message?: string; key?: string; translation?: string };
+      if (d.message === "Translation generated" && d.key && typeof d.translation === "string") {
+        setTranslationOverrides((prev) => ({ ...prev, [d.key!]: d.translation! }));
+      }
+      if (d.message === "Translation generated" || d.message === "Translation saved") {
+        revalidator.revalidate();
+      }
+    }
+  }, [fetcher.state, fetcher.data, revalidator]);
+
+  // Clear overrides when selection changes
+  useEffect(() => {
+    setTranslationOverrides({});
+    setActiveTab("missing");
+    setSearchQuery("");
+  }, [selection?.themeId, selection?.sourceFilename, selection?.targetLocale]);
 
   useEffect(() => {
     if (
@@ -588,41 +611,99 @@ export default function TranslatorDashboard() {
 
           <s-section heading="Strings">
             <s-stack direction="block" gap="base">
-              {Object.entries(selection.source).map(([key, source]) => (
-                <s-box key={key} padding="base" borderWidth="base" borderRadius="base">
-                  <fetcher.Form method="post">
-                    <input type="hidden" name="themeId" value={selection.themeId} />
-                    <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
-                    <input type="hidden" name="targetLocale" value={selection.targetLocale} />
-                    <input type="hidden" name="key" value={key} />
-                    <input type="hidden" name="intent" value="save" />
-                    <s-stack direction="block" gap="small">
-                      <s-stack direction="inline" gap="small">
-                        <s-heading>{key}</s-heading>
-                        <s-badge tone={selection.statuses[key] === "translated" ? "success" : selection.statuses[key] === "stale" ? "warning" : "critical"}>{selection.statuses[key]}</s-badge>
-                      </s-stack>
-                      <s-paragraph>{source}</s-paragraph>
-                      <textarea name="translation" defaultValue={selection.target[key] ?? ""} rows={3} aria-label={`Translation for ${key}`} style={{ width: "100%", padding: 10, resize: "vertical" }} />
-                      <s-stack direction="inline" gap="small">
-                        <s-button type="submit" loading={busy || undefined}>Save</s-button>
-                        <s-button
-                          onClick={() => fetcher.submit({
-                            intent: "translate",
-                            themeId: selection.themeId,
-                            sourceFilename: selection.sourceFilename,
-                            targetLocale: selection.targetLocale,
-                            key,
-                          }, { method: "post" })}
-                          loading={busy || undefined}
-                          disabled={!data.gemini.configured || undefined}
-                        >
-                          Translate with Gemini
-                        </s-button>
-                      </s-stack>
-                    </s-stack>
-                  </fetcher.Form>
-                </s-box>
-              ))}
+              <s-stack direction="inline" gap="small">
+                <s-button
+                  variant={activeTab === "missing" ? "primary" : "secondary"}
+                  onClick={() => setActiveTab("missing")}
+                >
+                  Missing ({counts.missing ?? 0})
+                </s-button>
+                <s-button
+                  variant={activeTab === "stale" ? "primary" : "secondary"}
+                  onClick={() => setActiveTab("stale")}
+                >
+                  Stale ({counts.stale ?? 0})
+                </s-button>
+                <s-button
+                  variant={activeTab === "translated" ? "primary" : "secondary"}
+                  onClick={() => setActiveTab("translated")}
+                >
+                  Translated ({counts.translated ?? 0})
+                </s-button>
+                <s-button
+                  variant={activeTab === "all" ? "primary" : "secondary"}
+                  onClick={() => setActiveTab("all")}
+                >
+                  All ({Object.keys(selection.source).length})
+                </s-button>
+              </s-stack>
+              <input
+                type="search"
+                placeholder="Search by key or source text..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.currentTarget.value)}
+                style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+              />
+              {(() => {
+                const entries = Object.entries(selection.source).filter(([key, source]) => {
+                  if (activeTab !== "all" && selection.statuses[key] !== activeTab) return false;
+                  if (searchQuery.trim()) {
+                    const q = searchQuery.toLowerCase();
+                    return key.toLowerCase().includes(q) || source.toLowerCase().includes(q);
+                  }
+                  return true;
+                });
+                if (!entries.length) {
+                  return <s-box padding="base" borderWidth="base" borderRadius="base"><s-paragraph>No strings match this filter.</s-paragraph></s-box>;
+                }
+                return entries.map(([key, source]) => {
+                  const currentValue = translationOverrides[key] ?? selection.target[key] ?? "";
+                  return (
+                    <s-box key={key} padding="base" borderWidth="base" borderRadius="base">
+                      <fetcher.Form method="post">
+                        <input type="hidden" name="themeId" value={selection.themeId} />
+                        <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
+                        <input type="hidden" name="targetLocale" value={selection.targetLocale} />
+                        <input type="hidden" name="key" value={key} />
+                        <input type="hidden" name="intent" value="save" />
+                        <s-stack direction="block" gap="small">
+                          <s-stack direction="inline" gap="small">
+                            <s-heading>{key}</s-heading>
+                            <s-badge tone={selection.statuses[key] === "translated" ? "success" : selection.statuses[key] === "stale" ? "warning" : "critical"}>{selection.statuses[key]}</s-badge>
+                          </s-stack>
+                          <s-paragraph>{source}</s-paragraph>
+                          <textarea
+                            name="translation"
+                            value={currentValue}
+                            onChange={(e) => setTranslationOverrides((prev) => ({ ...prev, [key]: e.currentTarget.value }))}
+                            rows={3}
+                            aria-label={`Translation for ${key}`}
+                            style={{ width: "100%", padding: 10, resize: "vertical" }}
+                          />
+                          <s-stack direction="inline" gap="small">
+                            <s-button type="submit" loading={busy || undefined}>Save</s-button>
+                            <s-button
+                              onClick={() => {
+                                fetcher.submit({
+                                  intent: "translate",
+                                  themeId: selection.themeId,
+                                  sourceFilename: selection.sourceFilename,
+                                  targetLocale: selection.targetLocale,
+                                  key,
+                                }, { method: "post" });
+                              }}
+                              loading={busy || undefined}
+                              disabled={!data.gemini.configured || undefined}
+                            >
+                              Translate with Gemini
+                            </s-button>
+                          </s-stack>
+                        </s-stack>
+                      </fetcher.Form>
+                    </s-box>
+                  );
+                });
+              })()}
             </s-stack>
           </s-section>
         </>
