@@ -18,7 +18,8 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
-        <s-link href="/app">Translator</s-link>
+        <s-link href="/app">Locale files</s-link>
+        <s-link href="/app/translations">Content</s-link>
         <s-link href="/app/settings">Settings</s-link>
       </s-app-nav>
       <Outlet />

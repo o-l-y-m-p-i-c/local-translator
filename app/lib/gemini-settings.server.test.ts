@@ -25,9 +25,11 @@ describe("Gemini shop settings", () => {
     expect(() => decryptGeminiApiKey(`${encrypted.slice(0, -2)}AA`)).toThrow();
   });
 
-  it("allows only supported models and bounded batch sizes", () => {
+  it("accepts any non-empty model name and bounded batch sizes", () => {
     expect(parseGeminiModel("gemini-2.5-flash-lite")).toBe("gemini-2.5-flash-lite");
-    expect(() => parseGeminiModel("gemini-pro-unsafe")).toThrow();
+    expect(parseGeminiModel("gemini-pro-unsafe")).toBe("gemini-pro-unsafe");
+    expect(() => parseGeminiModel("")).toThrow();
+    expect(() => parseGeminiModel("   ")).toThrow();
     expect(parseBatchSize("30")).toBe(30);
     expect(() => parseBatchSize("0")).toThrow();
     expect(() => parseBatchSize("51")).toThrow();

@@ -10,13 +10,10 @@ export const DEFAULT_BATCH_SIZE = 30;
 export const MIN_BATCH_SIZE = 1;
 export const MAX_BATCH_SIZE = 50;
 
-export type GeminiModel = (typeof GEMINI_MODELS)[number];
-
-export function parseGeminiModel(value: string): GeminiModel {
-  if (!GEMINI_MODELS.includes(value as GeminiModel)) {
-    throw new Error("Select a supported Gemini model");
-  }
-  return value as GeminiModel;
+export function parseGeminiModel(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("Enter a Gemini model name");
+  return trimmed;
 }
 
 export function parseBatchSize(value: string) {

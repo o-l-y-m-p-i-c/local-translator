@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
@@ -92,7 +92,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   } catch (error) {
     const message = error instanceof Error && [
       "Enter a Gemini API key",
-      "Select a supported Gemini model",
+      "Enter a Gemini model name",
       `Batch size must be between ${MIN_BATCH_SIZE} and ${MAX_BATCH_SIZE}`,
       "Unknown settings action",
     ].includes(error.message)
@@ -107,6 +107,11 @@ export default function Settings() {
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
   const formRef = useRef<HTMLFormElement>(null);
+  const [modelValue, setModelValue] = useState(data.model);
+
+  useEffect(() => {
+    setModelValue(data.model);
+  }, [data.model]);
 
   useEffect(() => {
     if (fetcher.data?.message) shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
@@ -134,9 +139,26 @@ export default function Settings() {
               autocomplete="off"
               placeholder={data.configured ? "Leave blank to keep the stored key" : "Enter API key"}
             />
-            <s-select label="Gemini model" name="model" value={data.model}>
-              {GEMINI_MODELS.map((model) => <s-option key={model} value={model}>{model}</s-option>)}
-            </s-select>
+            <s-text-field
+              label="Gemini model"
+              name="model"
+              value={modelValue}
+              onChange={(e) => setModelValue((e.currentTarget as unknown as HTMLInputElement).value)}
+              autocomplete="off"
+              placeholder="e.g. gemini-2.5-flash"
+              required
+            />
+            <s-stack direction="inline" gap="small">
+              {GEMINI_MODELS.map((model) => (
+                <s-button
+                  key={model}
+                  variant={modelValue === model ? "primary" : "secondary"}
+                  onClick={() => setModelValue(model)}
+                >
+                  {model}
+                </s-button>
+              ))}
+            </s-stack>
             <s-number-field
               label="Items per request"
               name="batchSize"

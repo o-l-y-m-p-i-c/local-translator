@@ -3,7 +3,7 @@ client_id = "4024bdafe032056440ef174ba8a19d95"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_themes,write_themes,read_locales"
+scopes = "read_themes,write_themes,read_locales,read_translations,write_translations,read_products,read_content"
 
 [webhooks]
 api_version = "2025-10"
