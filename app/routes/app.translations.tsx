@@ -69,13 +69,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     configured: Boolean(configuration),
     model: configuration?.model ?? null,
   };
+  const lazyLoadPageSize = configuration?.lazyLoadPageSize ?? 10;
 
   if (!resourceType || !targetLocale) {
-    return { gemini, resourceType: "", targetLocale: "", resources: [], hasNextPage: false, endCursor: null, targetLocales };
+    return { gemini, resourceType: "", targetLocale: "", resources: [], hasNextPage: false, endCursor: null, targetLocales, lazyLoadPageSize };
   }
 
   try {
-    const result = await translationsLib.getTranslatableResources(admin, resourceType as never, after, 10);
+    const result = await translationsLib.getTranslatableResources(admin, resourceType as never, after, lazyLoadPageSize);
     return {
       gemini,
       resourceType,
@@ -84,6 +85,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       hasNextPage: result.hasNextPage,
       endCursor: result.endCursor,
       targetLocales,
+      lazyLoadPageSize,
     };
   } catch (error) {
     console.error("[translations loader] error:", error);
@@ -275,6 +277,8 @@ export default function TranslationsPage() {
     });
     moreFetcher.load(`/app/translations?${params.toString()}`);
   };
+
+  const pageSize = data.lazyLoadPageSize ?? 10;
 
   const resources = [...(data.resources as unknown as ResourceData[]), ...extraResources];
 

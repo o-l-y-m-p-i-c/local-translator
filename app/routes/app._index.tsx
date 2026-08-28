@@ -95,7 +95,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   if (!theme || !sourceFilename || !targetLocale) {
-    return { ...dashboard, gemini, files: files.map(({ filename }) => filename), selection: null };
+    return { ...dashboard, gemini, lazyLoadPageSize: settings?.lazyLoadPageSize ?? 20, files: files.map(({ filename }) => filename), selection: null };
   }
 
   const sourceFile = files.find(({ filename }) => filename === sourceFilename);
@@ -173,6 +173,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     ...dashboard,
     gemini,
+    lazyLoadPageSize: settings?.lazyLoadPageSize ?? 20,
     files: files.map(({ filename }) => filename),
     selection: {
       themeId,
@@ -235,6 +236,44 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         data: { targetSnapshot: JSON.stringify(target), statusSnapshot: JSON.stringify(statuses) },
       });
       return { ok: true, message: intent === "translate" ? "Translation generated" : "Translation saved", key, translation };
+    }
+
+    if (intent === "translateAllVisible") {
+      const configuration = await getShopGeminiConfiguration(session.shop);
+      if (!configuration) throw new Error("Configure a Gemini API key in Settings first");
+      const keysToTranslate = String(form.get("keysToTranslate") || "").split("\n").filter(Boolean);
+      if (!keysToTranslate.length) throw new Error("No keys to translate");
+
+      // Translate in batches
+      const BATCH = 30;
+      let totalTranslated = 0;
+      for (let i = 0; i < keysToTranslate.length; i += BATCH) {
+        const batch = keysToTranslate.slice(i, i + BATCH);
+        const items = batch.map((key) => ({ key, source: source[key] }));
+        const result = await translateBatch(
+          items,
+          workspace.sourceLocale,
+          targetLocale,
+          configuration.apiKey,
+          configuration.model,
+        );
+        for (const key of batch) {
+          const translation = result.translations[key];
+          if (translation) {
+            const invalid = validatePlaceholders(source[key], translation);
+            if (!invalid.length) {
+              target[key] = translation;
+              statuses[key] = "translated";
+              totalTranslated++;
+            }
+          }
+        }
+      }
+      await prisma.translationWorkspace.update({
+        where: { id: workspace.id },
+        data: { targetSnapshot: JSON.stringify(target), statusSnapshot: JSON.stringify(statuses) },
+      });
+      return { ok: true, message: `Translated ${totalTranslated} string(s)` };
     }
 
     if (intent === "startJob") {
@@ -437,6 +476,7 @@ export default function TranslatorDashboard() {
   const [activeTab, setActiveTab] = useState<"all" | "missing" | "stale" | "translated">("missing");
   const [searchQuery, setSearchQuery] = useState("");
   const [translationOverrides, setTranslationOverrides] = useState<Record<string, string>>({});
+  const [visibleCount, setVisibleCount] = useState(data.lazyLoadPageSize ?? 20);
 
   useEffect(() => {
     if (fetcher.data?.message) shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
@@ -460,7 +500,8 @@ export default function TranslatorDashboard() {
     setTranslationOverrides({});
     setActiveTab("missing");
     setSearchQuery("");
-  }, [selection?.themeId, selection?.sourceFilename, selection?.targetLocale]);
+    setVisibleCount(data.lazyLoadPageSize ?? 20);
+  }, [selection?.themeId, selection?.sourceFilename, selection?.targetLocale, data.lazyLoadPageSize]);
 
   useEffect(() => {
     if (
@@ -637,13 +678,44 @@ export default function TranslatorDashboard() {
                   All ({Object.keys(selection.source).length})
                 </s-button>
               </s-stack>
-              <input
-                type="search"
-                placeholder="Search by key or source text..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.currentTarget.value)}
-                style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
-              />
+              <s-stack direction="inline" gap="small">
+                <input
+                  type="search"
+                  placeholder="Search by key or source text..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.currentTarget.value)}
+                  style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+                />
+                <fetcher.Form method="post">
+                  <input type="hidden" name="intent" value="translateAllVisible" />
+                  <input type="hidden" name="themeId" value={selection.themeId} />
+                  <input type="hidden" name="sourceFilename" value={selection.sourceFilename} />
+                  <input type="hidden" name="targetLocale" value={selection.targetLocale} />
+                  <input
+                    type="hidden"
+                    name="keysToTranslate"
+                    value={Object.entries(selection.source)
+                      .filter(([key]) => {
+                        if (activeTab !== "all" && selection.statuses[key] !== activeTab) return false;
+                        if (searchQuery.trim()) {
+                          const q = searchQuery.toLowerCase();
+                          return key.toLowerCase().includes(q) || selection.source[key].toLowerCase().includes(q);
+                        }
+                        return true;
+                      })
+                      .map(([key]) => key)
+                      .join("\n")}
+                  />
+                  <s-button
+                    type="submit"
+                    variant="primary"
+                    loading={busy || undefined}
+                    disabled={!data.gemini.configured || undefined}
+                  >
+                    Translate all visible
+                  </s-button>
+                </fetcher.Form>
+              </s-stack>
               {(() => {
                 const entries = Object.entries(selection.source).filter(([key, source]) => {
                   if (activeTab !== "all" && selection.statuses[key] !== activeTab) return false;
@@ -656,7 +728,11 @@ export default function TranslatorDashboard() {
                 if (!entries.length) {
                   return <s-box padding="base" borderWidth="base" borderRadius="base"><s-paragraph>No strings match this filter.</s-paragraph></s-box>;
                 }
-                return entries.map(([key, source]) => {
+                const visible = entries.slice(0, visibleCount);
+                return (
+                  <>
+                    <s-paragraph>Showing {visible.length} of {entries.length} strings</s-paragraph>
+                    {visible.map(([key, source]) => {
                   const currentValue = translationOverrides[key] ?? selection.target[key] ?? "";
                   return (
                     <s-box key={key} padding="base" borderWidth="base" borderRadius="base">
@@ -702,7 +778,14 @@ export default function TranslatorDashboard() {
                       </fetcher.Form>
                     </s-box>
                   );
-                });
+                })}
+                    {visibleCount < entries.length && (
+                      <s-button onClick={() => setVisibleCount((c) => c + (data.lazyLoadPageSize ?? 20))}>
+                        Load more ({entries.length - visibleCount} remaining)
+                      </s-button>
+                    )}
+                  </>
+                );
               })()}
             </s-stack>
           </s-section>

@@ -40,6 +40,7 @@ model ShopSettings {
   encryptedGeminiApiKey String?
   geminiModel           String   @default("gemini-2.5-flash")
   batchSize             Int      @default(30)
+  lazyLoadPageSize      Int      @default(20)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 }

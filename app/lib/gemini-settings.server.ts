@@ -34,5 +34,6 @@ export async function getShopGeminiConfiguration(shop: string) {
     apiKey: decryptGeminiApiKey(settings.encryptedGeminiApiKey),
     model: parseGeminiModel(settings.geminiModel),
     batchSize: settings.batchSize,
+    lazyLoadPageSize: settings.lazyLoadPageSize ?? 20,
   };
 }

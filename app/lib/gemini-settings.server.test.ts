@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { parseBatchSize, parseGeminiModel } from "./gemini-settings";
+import { parseBatchSize, parseGeminiModel, parseLazyLoadPageSize } from "./gemini-settings";
 import {
   decryptGeminiApiKey,
   encryptGeminiApiKey,
@@ -33,5 +33,8 @@ describe("Gemini shop settings", () => {
     expect(parseBatchSize("30")).toBe(30);
     expect(() => parseBatchSize("0")).toThrow();
     expect(() => parseBatchSize("51")).toThrow();
+    expect(parseLazyLoadPageSize("20")).toBe(20);
+    expect(() => parseLazyLoadPageSize("4")).toThrow();
+    expect(() => parseLazyLoadPageSize("201")).toThrow();
   });
 });

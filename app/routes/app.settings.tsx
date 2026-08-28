@@ -8,11 +8,15 @@ import { countTranslationTokens } from "../lib/gemini.server";
 import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_LAZY_LOAD_PAGE_SIZE,
   GEMINI_MODELS,
   MAX_BATCH_SIZE,
+  MAX_LAZY_LOAD_PAGE_SIZE,
   MIN_BATCH_SIZE,
+  MIN_LAZY_LOAD_PAGE_SIZE,
   parseBatchSize,
   parseGeminiModel,
+  parseLazyLoadPageSize,
 } from "../lib/gemini-settings";
 import {
   decryptGeminiApiKey,
@@ -27,6 +31,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     configured: Boolean(settings?.encryptedGeminiApiKey),
     model: settings?.geminiModel ?? DEFAULT_GEMINI_MODEL,
     batchSize: settings?.batchSize ?? DEFAULT_BATCH_SIZE,
+    lazyLoadPageSize: settings?.lazyLoadPageSize ?? DEFAULT_LAZY_LOAD_PAGE_SIZE,
     updatedAt: settings?.updatedAt.toISOString() ?? null,
   };
 };
@@ -49,6 +54,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const model = parseGeminiModel(String(form.get("model") || ""));
     const batchSize = parseBatchSize(String(form.get("batchSize") || ""));
+    const lazyLoadPageSize = parseLazyLoadPageSize(String(form.get("lazyLoadPageSize") || ""));
     const replacementKey = String(form.get("apiKey") || "").trim();
     const apiKey = replacementKey || (
       current?.encryptedGeminiApiKey
@@ -79,6 +85,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         encryptedGeminiApiKey: encryptGeminiApiKey(apiKey),
         geminiModel: model,
         batchSize,
+        lazyLoadPageSize,
       },
       update: {
         encryptedGeminiApiKey: replacementKey
@@ -86,6 +93,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           : current?.encryptedGeminiApiKey,
         geminiModel: model,
         batchSize,
+        lazyLoadPageSize,
       },
     });
     return { ok: true, message: "Gemini settings saved" };
@@ -94,6 +102,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       "Enter a Gemini API key",
       "Enter a Gemini model name",
       `Batch size must be between ${MIN_BATCH_SIZE} and ${MAX_BATCH_SIZE}`,
+      `Page size must be between ${MIN_LAZY_LOAD_PAGE_SIZE} and ${MAX_LAZY_LOAD_PAGE_SIZE}`,
       "Unknown settings action",
     ].includes(error.message)
       ? error.message
@@ -168,6 +177,18 @@ export default function Settings() {
               step={1}
               required
             />
+            <s-number-field
+              label="Items per page (lazy load)"
+              name="lazyLoadPageSize"
+              defaultValue={String(data.lazyLoadPageSize)}
+              min={MIN_LAZY_LOAD_PAGE_SIZE}
+              max={MAX_LAZY_LOAD_PAGE_SIZE}
+              step={1}
+              required
+            />
+            <s-paragraph>
+              Controls how many strings or resources are shown at once on the Locale files and Content pages before clicking "Load more".
+            </s-paragraph>
             <s-paragraph>
               The API key is encrypted on the server and is never displayed after submission.
             </s-paragraph>
