@@ -18,12 +18,32 @@ async function loadServerModules() {
   return { translateBatch, getShopGeminiConfiguration, translationsLib };
 }
 
-const RESOURCE_TYPE_LABELS: Array<{ value: string; label: string }> = [
-  { value: "PRODUCT", label: "Products" },
-  { value: "COLLECTION", label: "Collections" },
-  { value: "PAGE", label: "Pages" },
-  { value: "BLOG", label: "Blogs" },
-  { value: "ARTICLE", label: "Blog articles" },
+const RESOURCE_CATEGORIES: Array<{ label: string; types: Array<{ value: string; label: string }> }> = [
+  {
+    label: "Products",
+    types: [
+      { value: "PRODUCT", label: "Products" },
+      { value: "COLLECTION", label: "Collections" },
+    ],
+  },
+  {
+    label: "Online store",
+    types: [
+      { value: "ARTICLE", label: "Blog posts" },
+      { value: "BLOG", label: "Blog titles" },
+      { value: "PAGE", label: "Pages" },
+      { value: "METAOBJECT", label: "Metaobjects & filters" },
+      { value: "SHOP", label: "Store metadata, cookie banner, notifications, shipping" },
+      { value: "SHOP_POLICY", label: "Policies (refund, privacy, terms, shipping)" },
+    ],
+  },
+  {
+    label: "Content",
+    types: [
+      { value: "MENU", label: "Navigation menus" },
+      { value: "LINK", label: "Menu items (links)" },
+    ],
+  },
 ];
 
 const TARGET_LANGUAGES = [
@@ -233,8 +253,12 @@ export default function TranslationsPage() {
                 style={{ display: "block", width: "100%", padding: 10, marginTop: 6 }}
               >
                 <option value="">Select a content type</option>
-                {RESOURCE_TYPE_LABELS.map((rt) => (
-                  <option key={rt.value} value={rt.value}>{rt.label}</option>
+                {RESOURCE_CATEGORIES.map((cat) => (
+                  <optgroup key={cat.label} label={cat.label}>
+                    {cat.types.map((rt) => (
+                      <option key={rt.value} value={rt.value}>{rt.label}</option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </label>
