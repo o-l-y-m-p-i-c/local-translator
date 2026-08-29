@@ -26,11 +26,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       status: j.status,
       completedItems: j.completedItems,
       totalItems: j.totalItems,
+      currentResourceType: j.currentResourceType,
+      currentResourceCount: j.currentResourceCount,
     })),
   };
 };
 
-function ActiveJobsWidget({ jobs }: { jobs: Array<{ id: string; targetLocale: string; resourceType: string; status: string; completedItems: number; totalItems: number }> }) {
+function ActiveJobsWidget({ jobs }: { jobs: Array<{ id: string; targetLocale: string; resourceType: string; status: string; completedItems: number; totalItems: number; currentResourceType?: string | null; currentResourceCount?: number }> }) {
   const [open, setOpen] = useState(false);
   const activeCount = jobs.length;
 
@@ -44,6 +46,16 @@ function ActiveJobsWidget({ jobs }: { jobs: Array<{ id: string; targetLocale: st
     if (rt === "ALL_FORCE") return "Force re-translate";
     if (rt === "ALL_MISSING") return "Missing only";
     return rt;
+  };
+
+  const currentTypeLabel = (rt: string | null | undefined) => {
+    if (!rt) return "";
+    const labels: Record<string, string> = {
+      PRODUCT: "Products", COLLECTION: "Collections", ARTICLE: "Blog posts",
+      BLOG: "Blogs", PAGE: "Pages", METAOBJECT: "Metaobjects",
+      SHOP: "Store metadata", SHOP_POLICY: "Policies", LINK: "Menu items",
+    };
+    return labels[rt] || rt;
   };
 
   return (
@@ -125,6 +137,12 @@ function ActiveJobsWidget({ jobs }: { jobs: Array<{ id: string; targetLocale: st
                     <span style={{ fontSize: 11, color: "#0066cc", fontWeight: 600, textTransform: "uppercase" }}>{job.status}</span>
                   </div>
                   <div style={{ fontSize: 12, color: "#616161", marginBottom: 6 }}>{resourceLabel(job.resourceType)}</div>
+                  {job.currentResourceType && (
+                    <div style={{ fontSize: 11, color: "#0066cc", marginBottom: 4 }}>
+                      Now: {currentTypeLabel(job.currentResourceType)}
+                      {job.currentResourceCount ? ` (${job.currentResourceCount} processed)` : ""}
+                    </div>
+                  )}
                   <div style={{ width: "100%", height: 6, background: "#ebebeb", borderRadius: 3, overflow: "hidden" }}>
                     <div style={{
                       width: `${progress(job)}%`,

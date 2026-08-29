@@ -12,12 +12,12 @@ import { TABLE_STYLES } from "../components/tableStyles";
 import { authenticate } from "../shopify.server";
 
 async function loadServerModules() {
-  const [{ translateBatch }, { getShopGeminiConfiguration }, translationsLib] = await Promise.all([
+  const [{ translateBatch, buildGlossary }, { getShopGeminiConfiguration }, translationsLib] = await Promise.all([
     import("../lib/gemini.server"),
     import("../lib/gemini-settings.server"),
     import("../lib/shopify-translations.server"),
   ]);
-  return { translateBatch, getShopGeminiConfiguration, translationsLib };
+  return { translateBatch, buildGlossary, getShopGeminiConfiguration, translationsLib };
 }
 
 const RESOURCE_CATEGORIES: Array<{ label: string; types: Array<{ value: string; label: string }> }> = [
@@ -106,7 +106,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const resourceType = String(form.get("resourceType") || "");
   const resourceId = String(form.get("resourceId") || "");
 
-  const { translateBatch, getShopGeminiConfiguration, translationsLib } = await loadServerModules();
+  const { translateBatch, buildGlossary, getShopGeminiConfiguration, translationsLib } = await loadServerModules();
 
   try {
     if (intent === "translateAll") {
@@ -119,6 +119,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       let hasMore = true;
       let totalTranslated = 0;
       let totalErrors = 0;
+      let glossary: Record<string, string> = {};
 
       while (hasMore) {
         const result = await translationsLib.getTranslatableResources(admin, resourceType as never, cursor, 10);
@@ -128,7 +129,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             const translatable = resource.translatableContent.filter((c) => !SKIP_KEYS.has(c.key));
             if (!translatable.length) continue;
             const items = translatable.map((c) => ({ key: c.key, source: c.value }));
-            const geminiResult = await translateBatch(items, "en", targetLocale, configuration.apiKey, configuration.model);
+            const context = {
+              resourceType,
+              resourceName: resource.name,
+              fields: translatable.map((c) => c.key),
+              glossary: Object.keys(glossary).length ? glossary : undefined,
+            };
+            const geminiResult = await translateBatch(items, "en", targetLocale, configuration.apiKey, configuration.model, context);
             const translations = translatable.map((c) => ({
               key: c.key,
               value: geminiResult.translations[c.key] || "",
@@ -137,6 +144,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             if (translations.length) {
               await translationsLib.registerTranslations(admin, resource.resourceId, targetLocale, translations);
               totalTranslated += translations.length;
+              // Build glossary for consistency
+              const sourceTargetPairs = translatable.map((c) => ({
+                source: c.value,
+                target: geminiResult.translations[c.key] || "",
+              }));
+              glossary = buildGlossary(sourceTargetPairs, glossary);
             }
           } catch (error) {
             console.error(`[translateAll] resource ${resource.resourceId} failed:`, error);
@@ -178,6 +191,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         targetLocale,
         configuration.apiKey,
         configuration.model,
+        { resourceType, fields: keys },
       );
 
       const translations = keys.map((key, i) => ({
