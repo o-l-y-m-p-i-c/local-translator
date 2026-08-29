@@ -70,11 +70,13 @@ export function computeStatuses(
   );
 }
 
+// Liquid/template placeholders that MUST be preserved exactly during translation.
+// HTML tags are NOT included here — text inside HTML attributes (data-*, alt, title, etc.)
+// is translatable, so HTML tag strings legitimately change during translation.
 const TOKEN_PATTERNS = [
   /{{-?[\s\S]*?-?}}/g,
   /{%[-]?[\s\S]*?[-]?%}/g,
   /%\{[^}]+}/g,
-  /<\/?[a-zA-Z][^>]*>/g,
 ];
 
 export function extractPlaceholders(value: string): string[] {

@@ -39,11 +39,14 @@ describe("locale utilities", () => {
     );
   });
 
-  it("detects changed Liquid, interpolation, and HTML tokens", () => {
+  it("detects changed Liquid and interpolation tokens (HTML tags are not protected)", () => {
     const source = "Hi {{ customer.name }} %{count} <strong>{% if ok %}yes{% endif %}</strong>";
     expect(validatePlaceholders(source, source)).toEqual([]);
+    // HTML tags can change (text inside attributes is translatable), but Liquid/placeholder tokens must be preserved
     expect(validatePlaceholders(source, "Salut {{ name }} %{count} <b>yes</b>")).toEqual(
-      expect.arrayContaining(["{{ customer.name }}", "{{ name }}", "<strong>", "<b>"]),
+      expect.arrayContaining(["{{ customer.name }}", "{{ name }}"]),
     );
+    // HTML-only changes are NOT flagged as errors
+    expect(validatePlaceholders("<p>Hello</p>", "<b>Bonjour</b>")).toEqual([]);
   });
 });

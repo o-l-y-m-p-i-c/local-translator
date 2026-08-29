@@ -1,14 +1,15 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
   LoaderFunctionArgs,
 } from "react-router";
-import { useFetcher, useLoaderData, useNavigation } from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { TABLE_STYLES } from "../components/tableStyles";
 import prisma from "../db.server";
+import { unauthenticated } from "../shopify.server";
 import { authenticate } from "../shopify.server";
 
 const RESOURCE_CATEGORIES = [
@@ -99,8 +100,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    // Start translation in the background
-    translateResources(admin, session.shop, targetLocale, typesToTranslate, configuration.apiKey, configuration.model, job.id, mode)
+    // Start translation in the background — re-authenticate inside to avoid token expiry
+    translateResources(session.shop, targetLocale, typesToTranslate, configuration.apiKey, configuration.model, job.id, mode)
       .catch((error) => {
         console.error("[translate] background error:", error);
         prisma.contentTranslationJob.update({
@@ -119,8 +120,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return Response.json({ ok: false, message: "Unknown action" }, { status: 400 });
 };
 
+// Fields that should not be translated (handles must be unique across the store)
+const SKIP_KEYS = new Set(["handle"]);
+
 async function translateResources(
-  admin: { graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> },
   shop: string,
   targetLocale: string,
   resourceTypes: readonly string[],
@@ -130,9 +133,12 @@ async function translateResources(
   mode: "all" | "force" | "missing" = "all",
 ) {
   const { getTranslatableResources, registerTranslations } = await import("../lib/shopify-translations.server");
-  const { translateBatch } = await import("../lib/gemini.server");
+  const { translateBatch, isRetryableGeminiError } = await import("../lib/gemini.server");
   let completed = 0;
   let totalSkipped = 0;
+
+  // Re-authenticate to get a fresh admin client that isn't tied to the request lifecycle
+  const { admin } = await unauthenticated.admin(shop);
 
   for (const resourceType of resourceTypes) {
     const job = await prisma.contentTranslationJob.findUnique({ where: { id: jobId } });
@@ -146,12 +152,12 @@ async function translateResources(
         for (const resource of result.resources) {
           if (!resource.translatableContent.length) continue;
 
+          // Skip fields that shouldn't be translated (e.g., handles — they must be unique store-wide)
+          let fieldsToTranslate = resource.translatableContent.filter((c) => !SKIP_KEYS.has(c.key));
+
           // In "missing" mode, skip fields that already have a translation in the target locale
-          let fieldsToTranslate = resource.translatableContent;
           if (mode === "missing") {
-            fieldsToTranslate = resource.translatableContent.filter((c) => {
-              // A field is "missing" if the translatable content's value for the target locale is empty
-              // or if the locale field doesn't match the target locale (meaning no translation exists)
+            fieldsToTranslate = fieldsToTranslate.filter((c) => {
               const targetTranslation = resource.translatableContent.find(
                 (tc) => tc.key === c.key && tc.locale === targetLocale && tc.value.trim()
               );
@@ -166,7 +172,19 @@ async function translateResources(
 
           try {
             const items = fieldsToTranslate.map((c) => ({ key: c.key, source: c.value }));
-            const geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model);
+            let geminiResult;
+            try {
+              geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model);
+            } catch (retryableError) {
+              if (isRetryableGeminiError(retryableError)) {
+                // Wait 60s and retry once for rate limits
+                console.log("[translateResources] Rate limited, waiting 60s before retry...");
+                await new Promise((resolve) => setTimeout(resolve, 60000));
+                geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model);
+              } else {
+                throw retryableError;
+              }
+            }
             const translations = fieldsToTranslate.map((c) => ({
               key: c.key,
               value: geminiResult.translations[c.key] || "",
@@ -202,21 +220,29 @@ async function translateResources(
 export default function LanguagesPage() {
   const data = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
-  const navigation = useNavigation();
+  const poller = useFetcher<typeof loader>();
   const shopify = useAppBridge();
-  const busy = fetcher.state !== "idle" || navigation.state !== "idle";
   const [expandedLocale, setExpandedLocale] = useState<string | null>(null);
+  const [submittingForm, setSubmittingForm] = useState<string | null>(null);
+
+  // Only "busy" when a form is actually being submitted, not when polling
+  const isSubmitting = fetcher.state !== "idle";
 
   useEffect(() => {
     if (fetcher.data?.message) shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
   }, [fetcher.data, shopify]);
 
-  // Poll for job status updates if any job is active
+  // Clear submitting state when fetcher returns to idle
+  useEffect(() => {
+    if (fetcher.state === "idle") setSubmittingForm(null);
+  }, [fetcher.state]);
+
+  // Poll for job status updates if any job is active — uses separate fetcher to avoid button loading states
   const hasActiveJobs = data.jobs.some((j) => j.status === "active" || j.status === "pending");
   useEffect(() => {
     if (!hasActiveJobs) return;
     const interval = setInterval(() => {
-      fetcher.load("/app/languages");
+      poller.load("/app/languages");
     }, 3000);
     return () => clearInterval(interval);
   }, [hasActiveJobs]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -271,8 +297,8 @@ export default function LanguagesPage() {
               );
 
               return (
-                <>
-                  <tr key={lang.locale} style={TABLE_STYLES.trHover}>
+                <Fragment key={lang.locale}>
+                  <tr style={TABLE_STYLES.trHover}>
                     <td style={TABLE_STYLES.td}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <button
@@ -307,27 +333,27 @@ export default function LanguagesPage() {
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         {!isActive && !anyCategoryActive && (
                           <>
-                            <fetcher.Form method="post" style={{ display: "inline" }}>
+                            <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`missing-${lang.locale}`)}>
                               <input type="hidden" name="intent" value="translateMissing" />
                               <input type="hidden" name="targetLocale" value={lang.locale} />
-                              <s-button type="submit" variant="primary" loading={busy || undefined}>
+                              <s-button type="submit" variant="primary" loading={(submittingForm === `missing-${lang.locale}` && isSubmitting) || undefined}>
                                 Translate missing
                               </s-button>
                             </fetcher.Form>
-                            <fetcher.Form method="post" style={{ display: "inline" }}>
+                            <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`force-${lang.locale}`)}>
                               <input type="hidden" name="intent" value="forceTranslate" />
                               <input type="hidden" name="targetLocale" value={lang.locale} />
-                              <s-button type="submit" loading={busy || undefined}>
+                              <s-button type="submit" loading={(submittingForm === `force-${lang.locale}` && isSubmitting) || undefined}>
                                 Force translate
                               </s-button>
                             </fetcher.Form>
                           </>
                         )}
                         {(isActive || anyCategoryActive) && (
-                          <fetcher.Form method="post" style={{ display: "inline" }}>
+                          <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`cancel-${lang.locale}`)}>
                             <input type="hidden" name="intent" value="cancel" />
                             <input type="hidden" name="targetLocale" value={lang.locale} />
-                            <s-button type="submit" tone="critical" loading={busy || undefined}>
+                            <s-button type="submit" tone="critical" loading={(submittingForm === `cancel-${lang.locale}` && isSubmitting) || undefined}>
                               Cancel
                             </s-button>
                           </fetcher.Form>
@@ -375,13 +401,13 @@ export default function LanguagesPage() {
                                     </td>
                                     <td style={TABLE_STYLES.td}>
                                       {!catActive && (
-                                        <fetcher.Form method="post" style={{ display: "inline" }}>
+                                        <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`cat-${lang.locale}-${rt}`)}>
                                           <input type="hidden" name="intent" value="translateCategory" />
                                           <input type="hidden" name="targetLocale" value={lang.locale} />
                                           <input type="hidden" name="resourceType" value={rt} />
                                           <s-button
                                             type="submit"
-                                            loading={busy || undefined}
+                                            loading={(submittingForm === `cat-${lang.locale}-${rt}` && isSubmitting) || undefined}
                                             disabled={(isActive || anyCategoryActive) || undefined}
                                           >
                                             Translate
@@ -398,7 +424,7 @@ export default function LanguagesPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               );
             })}
           </tbody>

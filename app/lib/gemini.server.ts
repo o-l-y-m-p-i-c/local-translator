@@ -41,16 +41,17 @@ Context:
 - File type: JSON locale file used for storefront translations
 
 Rules:
-1. Translate each string from ${sourceName} to ${targetName}.
+1. Translate each string from ${sourceName} to ${targetName}. Translate EVERYTHING that is user-facing text — including product names, category names, collection names, and menu items. Do NOT leave English text untranslated unless it is a registered trademark or brand logo word.
 2. Return every key exactly once, using the same key in the response.
 3. Preserve ALL Liquid expressions exactly: {{ }}, {% %}, {{- -}} tokens.
 4. Preserve ALL placeholder tokens: {{ count }}, {{ product_title }}, %{placeholder}, etc.
-5. Preserve ALL HTML tags and attributes exactly as they appear.
-6. Preserve brand names, product names, and proper nouns (do not translate them).
+5. Preserve HTML tag structure (tag names, nesting) but DO translate text inside HTML attributes like data-description, alt, title, placeholder, aria-label when they contain user-facing text.
+6. The ONLY words to keep untranslated are: registered trademarks (™, ®), company names used as brands, and proper nouns that have no established translation in ${targetName} (e.g., person names, city names). Product category names like "Glitter Cups", "Signature Cups", "Custom Cups" MUST be translated.
 7. Keep whitespace and special characters meaningful to the layout.
 8. Do NOT translate the keys — only the values.
 9. Adapt tone for e-commerce: natural, concise, customer-friendly ${targetName}.
 10. For pluralization keys (e.g. "one"/"other"), translate appropriately for the target language's plural rules.
+11. Be consistent: if you translate "Cups" to one word in ${targetName}, use that same word everywhere it appears.
 
 Strings to translate:
 ${JSON.stringify(items)}`;

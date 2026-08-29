@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -114,6 +114,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const configuration = await getShopGeminiConfiguration(session.shop);
       if (!configuration) throw new Error("Configure a Gemini API key in Settings first");
 
+      const SKIP_KEYS = new Set(["handle"]);
       let cursor: string | null = null;
       let hasMore = true;
       let totalTranslated = 0;
@@ -124,9 +125,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         for (const resource of result.resources) {
           if (!resource.translatableContent.length) continue;
           try {
-            const items = resource.translatableContent.map((c) => ({ key: c.key, source: c.value }));
+            const translatable = resource.translatableContent.filter((c) => !SKIP_KEYS.has(c.key));
+            if (!translatable.length) continue;
+            const items = translatable.map((c) => ({ key: c.key, source: c.value }));
             const geminiResult = await translateBatch(items, "en", targetLocale, configuration.apiKey, configuration.model);
-            const translations = resource.translatableContent.map((c) => ({
+            const translations = translatable.map((c) => ({
               key: c.key,
               value: geminiResult.translations[c.key] || "",
               digest: c.digest,
@@ -155,11 +158,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const configuration = await getShopGeminiConfiguration(session.shop);
       if (!configuration) throw new Error("Configure a Gemini API key in Settings first");
 
-      const keys = String(form.get("keys") || "").split("\n").filter(Boolean);
-      const sources = String(form.get("sources") || "").split("\n").filter(Boolean);
-      const digests = String(form.get("digests") || "").split("\n").filter(Boolean);
+      const SKIP_KEYS = new Set(["handle"]);
+      const allKeys = String(form.get("keys") || "").split("\n").filter(Boolean);
+      const allSources = String(form.get("sources") || "").split("\n").filter(Boolean);
+      const allDigests = String(form.get("digests") || "").split("\n").filter(Boolean);
 
-      if (!keys.length) throw new Error("No translation keys provided");
+      // Filter out handle fields
+      const filteredIndices = allKeys.map((key, i) => ({ key, i })).filter(({ key }) => !SKIP_KEYS.has(key));
+      const keys = filteredIndices.map(({ key }) => key);
+      const sources = filteredIndices.map(({ i }) => allSources[i] || "");
+      const digests = filteredIndices.map(({ i }) => allDigests[i] || "");
+
+      if (!keys.length) throw new Error("No translatable fields (handle fields are skipped)");
 
       const items = keys.map((key, i) => ({ key, source: sources[i] || "" }));
       const result = await translateBatch(
@@ -237,7 +247,8 @@ export default function TranslationsPage() {
   const fetcher = useFetcher<typeof action>();
   const navigation = useNavigation();
   const shopify = useAppBridge();
-  const busy = fetcher.state !== "idle" || navigation.state !== "idle";
+  const isSubmitting = fetcher.state !== "idle";
+  const [submittingForm, setSubmittingForm] = useState<string | null>(null);
   const [editingResource, setEditingResource] = useState<string | null>(null);
   const [editValues, setEditValues] = useState<Record<string, Record<string, string>>>({});
   const [extraResources, setExtraResources] = useState<ResourceData[]>([]);
@@ -250,6 +261,7 @@ export default function TranslationsPage() {
   useEffect(() => {
     if (fetcher.data?.message) shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
     if (fetcher.state === "idle" && translatingAll) setTranslatingAll(false);
+    if (fetcher.state === "idle") setSubmittingForm(null);
   }, [fetcher.data, fetcher.state, shopify, translatingAll]);
 
   useEffect(() => {
@@ -343,14 +355,14 @@ export default function TranslationsPage() {
               onChange={(e) => setSearchQuery(e.currentTarget.value)}
               style={TABLE_STYLES.searchInput}
             />
-            <fetcher.Form method="post" style={{ display: "inline" }}>
+            <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm("translateAll")}>
               <input type="hidden" name="intent" value="translateAll" />
               <input type="hidden" name="resourceType" value={data.resourceType} />
               <input type="hidden" name="targetLocale" value={data.targetLocale} />
               <s-button
                 type="submit"
                 variant="primary"
-                loading={translatingAll || busy || undefined}
+                loading={translatingAll || (submittingForm === "translateAll" && isSubmitting) || undefined}
                 disabled={!data.gemini.configured || undefined}
                 onClick={() => setTranslatingAll(true)}
               >
@@ -392,8 +404,8 @@ export default function TranslationsPage() {
                       const isEditing = editingResource === resource.resourceId;
                       const hasContent = resource.translatableContent.length > 0;
                       return (
-                        <>
-                          <tr key={resource.resourceId} style={TABLE_STYLES.trHover}>
+                        <Fragment key={resource.resourceId}>
+                          <tr style={TABLE_STYLES.trHover}>
                             <td style={TABLE_STYLES.td}>
                               <strong style={{ fontSize: 14 }}>
                                 <HighlightText text={resource.name} query={searchQuery} />
@@ -438,14 +450,14 @@ export default function TranslationsPage() {
                                   </s-button>
                                 )}
                                 {hasContent && (
-                                  <fetcher.Form method="post" style={{ display: "inline" }}>
+                                  <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`ai-${resource.resourceId}`)}>
                                     <input type="hidden" name="intent" value="translate" />
                                     <input type="hidden" name="resourceId" value={resource.resourceId} />
                                     <input type="hidden" name="targetLocale" value={data.targetLocale} />
                                     <input type="hidden" name="keys" value={resource.translatableContent.map((c) => c.key).join("\n")} />
                                     <input type="hidden" name="sources" value={resource.translatableContent.map((c) => c.value).join("\n")} />
                                     <input type="hidden" name="digests" value={resource.translatableContent.map((c) => c.digest).join("\n")} />
-                                    <s-button type="submit" loading={busy || undefined} disabled={!data.gemini.configured || undefined}>
+                                    <s-button type="submit" loading={(submittingForm === `ai-${resource.resourceId}` && isSubmitting) || undefined} disabled={!data.gemini.configured || undefined}>
                                       AI
                                     </s-button>
                                   </fetcher.Form>
@@ -456,7 +468,7 @@ export default function TranslationsPage() {
                           {isEditing && hasContent && (
                             <tr key={`${resource.resourceId}-edit`}>
                               <td colSpan={4} style={{ ...TABLE_STYLES.td, background: "#fafafa" }}>
-                                <fetcher.Form method="post">
+                                <fetcher.Form method="post" onSubmit={() => setSubmittingForm(`save-${resource.resourceId}`)}>
                                   <input type="hidden" name="intent" value="save" />
                                   <input type="hidden" name="resourceId" value={resource.resourceId} />
                                   <input type="hidden" name="targetLocale" value={data.targetLocale} />
@@ -504,7 +516,7 @@ export default function TranslationsPage() {
                                       .join("\n")}
                                   />
                                   <div style={{ marginTop: 8 }}>
-                                    <s-button type="submit" variant="primary" loading={busy || undefined}>
+                                    <s-button type="submit" variant="primary" loading={(submittingForm === `save-${resource.resourceId}` && isSubmitting) || undefined}>
                                       Save translations
                                     </s-button>
                                   </div>
@@ -512,7 +524,7 @@ export default function TranslationsPage() {
                               </td>
                             </tr>
                           )}
-                        </>
+                        </Fragment>
                       );
                     })}
                   </tbody>
