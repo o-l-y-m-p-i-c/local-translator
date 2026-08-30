@@ -8,6 +8,7 @@ export type TranslationContext = {
   fields?: string[]; // e.g. ["title", "body_html", "meta_description"]
   force?: boolean; // when true, use aggressive prompt to prevent untranslated strings
   glossary?: Record<string, string>; // established translations for consistency
+  brandName?: string; // brand name to never translate (e.g. "Noonchi Organic")
 };
 export type GeminiUsage = {
   promptTokenCount: number;
@@ -69,6 +70,11 @@ function promptFor(items: TranslationItem[], sourceLocale: string, targetLocale:
     ? `\n\nCONSISTENCY GLOSSARY — When you encounter these EXACT phrases in the source text, use the established translation. Do NOT use synonyms or alternatives for these complete phrases:\n${glossaryEntries.map(([src, tgt]) => `  "${src}" → "${tgt}"`).join("\n")}\n`
     : "";
 
+  // Brand name exclusion: never translate the store's brand name
+  const brandContext = context?.brandName
+    ? `\n- BRAND NAME: "${context.brandName}" is the store's brand name. NEVER translate it — keep it exactly as-is in any language. This includes partial matches (e.g. if the brand is "Noonchi", keep "Noonchi" untranslated even in compound phrases like "Noonchi Cups").`
+    : "";
+
   // Resource-type-specific guidance
   const typeSpecific = context?.resourceType === "LINK"
     ? `\n- These are NAVIGATION MENU ITEMS for a store. They are NOT brand names. "Glitter Cups" means "cups with glitter effect". "Signature Cups" means "premium/flagship cups". "Custom Cups" means "made-to-order cups". Translate ALL such phrases.`
@@ -90,7 +96,7 @@ function promptFor(items: TranslationItem[], sourceLocale: string, targetLocale:
 Context:
 - Source language: ${sourceName} (${sourceLocale})
 - Target language: ${targetName} (${targetLocale})
-- Platform: Shopify online store${resourceContext}${nameContext}${fieldsContext}${typeSpecific}${glossaryContext}
+- Platform: Shopify online store${resourceContext}${nameContext}${fieldsContext}${typeSpecific}${brandContext}${glossaryContext}
 
 IMPORTANT — Disambiguation:
 - Words like "Orange", "Rose", "Olive", "Coral", "Navy", "Cream", "Mint", "Sand", "Stone" can be colors OR objects. In a Shopify store context, when translating product names, variant options, collection names, or filter values, these almost always refer to COLORS, not fruits/objects. Translate them as colors.
@@ -140,15 +146,20 @@ export async function translateBatch(
   }
 
   const ai = new GoogleGenAI({ apiKey });
-  const response = await ai.models.generateContent({
-    model,
-    contents: promptFor(items, sourceLocale, targetLocale, context),
-    config: {
-      responseMimeType: "application/json",
-      responseJsonSchema: RESPONSE_SCHEMA,
-      temperature: 0.2,
-    },
-  });
+  const response = await Promise.race([
+    ai.models.generateContent({
+      model,
+      contents: promptFor(items, sourceLocale, targetLocale, context),
+      config: {
+        responseMimeType: "application/json",
+        responseJsonSchema: RESPONSE_SCHEMA,
+        temperature: 0.2,
+      },
+    }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Gemini API timeout after 120s")), 120_000),
+    ),
+  ]);
   if (!response.text) throw new Error("Gemini returned an empty response");
   const parsed = JSON.parse(response.text) as {
     translations?: Array<{ key?: unknown; translation?: unknown }>;

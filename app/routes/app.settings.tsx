@@ -33,6 +33,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     model: settings?.geminiModel ?? DEFAULT_GEMINI_MODEL,
     batchSize: settings?.batchSize ?? DEFAULT_BATCH_SIZE,
     lazyLoadPageSize: settings?.lazyLoadPageSize ?? DEFAULT_LAZY_LOAD_PAGE_SIZE,
+    brandName: settings?.brandName ?? "",
     updatedAt: settings?.updatedAt.toISOString() ?? null,
   };
 };
@@ -56,6 +57,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const model = parseGeminiModel(String(form.get("model") || ""));
     const batchSize = parseBatchSize(String(form.get("batchSize") || ""));
     const lazyLoadPageSize = parseLazyLoadPageSize(String(form.get("lazyLoadPageSize") || ""));
+    const brandName = String(form.get("brandName") || "").trim();
     const replacementKey = String(form.get("apiKey") || "").trim();
     const apiKey = replacementKey || (
       current?.encryptedGeminiApiKey
@@ -87,6 +89,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         geminiModel: model,
         batchSize,
         lazyLoadPageSize,
+        brandName: brandName || null,
       },
       update: {
         encryptedGeminiApiKey: replacementKey
@@ -95,6 +98,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         geminiModel: model,
         batchSize,
         lazyLoadPageSize,
+        brandName: brandName || null,
       },
     });
     return { ok: true, message: "Gemini settings saved" };
@@ -181,6 +185,23 @@ export default function Settings() {
                     {model}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                  Brand name (never translate)
+                </label>
+                <s-text-field
+                  name="brandName"
+                  defaultValue={data.brandName}
+                  autocomplete="off"
+                  placeholder="e.g. Noonchi Organic"
+                />
+                <p style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
+                  Your store's brand name. It will be kept untranslated in all languages.
+                </p>
               </div>
             </div>
 

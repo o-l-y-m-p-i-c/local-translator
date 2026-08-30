@@ -65,7 +65,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { ok: true, message: `Cancelled translation jobs for ${targetLocale}` };
   }
 
-  if (intent === "translateFull" || intent === "translateCategory" || intent === "forceTranslate" || intent === "translateMissing") {
+  if (intent === "translateFull" || intent === "translateCategory" || intent === "forceTranslate" || intent === "forceTranslateCategory" || intent === "translateMissing") {
     const { getShopGeminiConfiguration } = await import("../lib/gemini-settings.server");
     const configuration = await getShopGeminiConfiguration(session.shop);
     if (!configuration) throw new Error("Configure a Gemini API key in Settings first");
@@ -79,16 +79,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ ok: false, message: "No resource type specified" }, { status: 400 });
     }
 
-    // forceTranslate = re-translate everything (mode: "force")
+    // forceTranslate/forceTranslateCategory = re-translate everything (mode: "force")
     // translateMissing = only translate fields with no existing translation (mode: "missing")
     // translateFull/translateCategory = translate everything (mode: "all", same as force but semantically "first pass")
     const mode: "all" | "force" | "missing" =
-      intent === "forceTranslate" ? "force" :
+      intent === "forceTranslate" || intent === "forceTranslateCategory" ? "force" :
       intent === "translateMissing" ? "missing" : "all";
 
     const jobLabel = intent === "forceTranslate" ? "ALL_FORCE" :
       intent === "translateMissing" ? "ALL_MISSING" :
-      intent === "translateFull" ? "ALL" : resourceType;
+      intent === "translateFull" ? "ALL" :
+      intent === "forceTranslateCategory" ? `${resourceType}_FORCE` : resourceType;
 
     const job = await prisma.contentTranslationJob.create({
       data: {
@@ -103,7 +104,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     // Start translation in the background — re-authenticate inside to avoid token expiry
-    translateResources(session.shop, targetLocale, typesToTranslate, configuration.apiKey, configuration.model, job.id, mode)
+    translateResources(session.shop, targetLocale, typesToTranslate, configuration.apiKey, configuration.model, job.id, mode, configuration.brandName)
       .catch((error) => {
         console.error("[translate] background error:", error);
         prisma.contentTranslationJob.update({
@@ -115,6 +116,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const label = intent === "forceTranslate" ? "full store (force re-translate)"
       : intent === "translateMissing" ? "missing content"
       : intent === "translateFull" ? "full store"
+      : intent === "forceTranslateCategory" ? `${RESOURCE_LABELS[resourceType] || resourceType} (force re-translate)`
       : RESOURCE_LABELS[resourceType] || resourceType;
     return { ok: true, message: `Started translation of ${label} to ${targetLocale}` };
   }
@@ -126,28 +128,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 const SKIP_KEYS = new Set(["handle"]);
 
 // Theme locale file top-level sections that correspond to the categories the user sees
-const THEME_SECTION_LABELS: Record<string, string> = {
-  general: "General UI strings",
-  sections: "Sections",
-  templates: "Templates",
-  theme_settings: "Theme settings",
-  customer: "Customer account",
-  products: "Product strings",
-  collections: "Collection strings",
-  blogs: "Blog strings",
-  articles: "Article strings",
-  pages: "Page strings",
-  cart: "Cart",
-  search: "Search",
-  contact: "Contact forms",
-  social: "Social media",
-  gift_cards: "Gift cards",
-  accessibility: "Accessibility",
-  date_formats: "Date formats",
-  number_formats: "Number formats",
-  shop: "Shop settings",
-};
-
 async function translateThemeContent(
   getAdmin: () => Promise<{ graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response> }>,
   shop: string,
@@ -156,162 +136,338 @@ async function translateThemeContent(
   model: string,
   jobId: string,
   mode: "all" | "force" | "missing",
+  brandName?: string | null,
 ) {
-  const { getDashboardData, getThemeLocaleFiles, getThemeJsonFiles, readThemeLocale, upsertThemeLocale, extractTranslatableFromThemeJson } = await import("../lib/shopify-theme.server");
+  const { getTranslatableResources, registerTranslations } = await import("../lib/shopify-translations.server");
   const { translateBatch, isRetryableGeminiError, buildGlossary } = await import("../lib/gemini.server");
-  const { flattenLocale, mergeLocale, localeFilenameFor, localeFromFilename, parseLocaleJson } = await import("../lib/locale");
 
   let admin = await getAdmin();
   let glossary: Record<string, string> = {};
-  const dashboard = await getDashboardData(admin);
-  const primaryLocale = dashboard.shopLocales.find((l) => l.primary);
-  if (!primaryLocale) throw new Error("No primary locale found");
 
-  // Find the main theme (published theme)
-  const theme = dashboard.themes.find((t) => t.role === "main") || dashboard.themes[0];
-  if (!theme) throw new Error("No theme found");
+  // Wrapper that re-authenticates on 401 (token expiry during long jobs)
+  async function withAdmin<T>(fn: (a: typeof admin) => Promise<T>): Promise<T> {
+    try {
+      return await fn(admin);
+    } catch (error: unknown) {
+      const is401 = error instanceof Error && ("response" in error) && (error as { response?: { code?: number } }).response?.code === 401;
+      if (is401) {
+        console.log("[translateThemeContent] Token expired (401), re-authenticating...");
+        admin = await getAdmin();
+        return await fn(admin);
+      }
+      throw error;
+    }
+  }
 
-  // Update job with current resource type
+  // All theme-related resource types that cover the 6 categories:
+  // 1. App embeds → ONLINE_STORE_THEME_APP_EMBED
+  // 2. Default theme content → ONLINE_STORE_THEME_LOCALE_CONTENT
+  // 3. Section groups → ONLINE_STORE_THEME_SECTION_GROUP
+  // 4. Static sections / templates → ONLINE_STORE_THEME_JSON_TEMPLATE
+  // 5. Theme settings → ONLINE_STORE_THEME_SETTINGS_CATEGORY
+  // 6. Settings data sections → ONLINE_STORE_THEME_SETTINGS_DATA_SECTIONS
+  const THEME_RESOURCE_TYPES = [
+    "ONLINE_STORE_THEME_LOCALE_CONTENT",
+    "ONLINE_STORE_THEME_JSON_TEMPLATE",
+    "ONLINE_STORE_THEME_SECTION_GROUP",
+    "ONLINE_STORE_THEME_APP_EMBED",
+    "ONLINE_STORE_THEME_SETTINGS_CATEGORY",
+    "ONLINE_STORE_THEME_SETTINGS_DATA_SECTIONS",
+  ] as const;
+
+  const THEME_TYPE_LABELS: Record<string, string> = {
+    ONLINE_STORE_THEME_LOCALE_CONTENT: "Default theme content",
+    ONLINE_STORE_THEME_JSON_TEMPLATE: "Templates & static sections",
+    ONLINE_STORE_THEME_SECTION_GROUP: "Section groups",
+    ONLINE_STORE_THEME_APP_EMBED: "App embeds",
+    ONLINE_STORE_THEME_SETTINGS_CATEGORY: "Theme settings",
+    ONLINE_STORE_THEME_SETTINGS_DATA_SECTIONS: "Settings data sections",
+  };
+
   await prisma.contentTranslationJob.update({
     where: { id: jobId },
-    data: { currentResourceType: "THEME", currentResourceCount: 0, totalResourceCount: 0 },
+    data: { currentResourceType: "THEME", currentResourceCount: 0, totalResourceCount: THEME_RESOURCE_TYPES.length },
   });
 
-  const files = await getThemeLocaleFiles(admin, theme.id);
+  let typeCompleted = 0;
 
-  // Find all source files for the primary locale (main + schema + any others)
-  const primaryPrefix = `locales/${primaryLocale.locale}`;
-  const sourceFiles = files.filter((f) =>
-    f.filename === `${primaryPrefix}.default.json` ||
-    f.filename === `${primaryPrefix}.json` ||
-    f.filename === `${primaryPrefix}.default.schema.json` ||
-    f.filename === `${primaryPrefix}.schema.json`
-  );
-  if (!sourceFiles.length) throw new Error(`No source locale files found for ${primaryLocale.locale}`);
-  if (!sourceFiles.some((f) => !f.filename.endsWith(".schema.json"))) {
-    throw new Error(`Source locale file ${primaryPrefix}.default.json not found`);
+  for (const resourceType of THEME_RESOURCE_TYPES) {
+    const jobCheck = await prisma.contentTranslationJob.findUnique({ where: { id: jobId } });
+    if (!jobCheck || jobCheck.status === "cancelled") return;
+
+    const typeLabel = THEME_TYPE_LABELS[resourceType] || resourceType;
+    console.log(`[translateThemeContent] Processing ${resourceType} (${typeLabel})...`);
+
+    try {
+      let cursor: string | null = null;
+      let hasMore = true;
+      let resourceCount = 0;
+
+      while (hasMore) {
+        const result = await withAdmin((a) => getTranslatableResources(a, resourceType as never, cursor, 10));
+        console.log(`[translateThemeContent] ${resourceType}: page with ${result.resources.length} resources`);
+
+        for (const resource of result.resources) {
+          if (!resource.translatableContent.length) continue;
+
+          // Skip handle fields
+          let fieldsToTranslate = resource.translatableContent.filter((c) => !SKIP_KEYS.has(c.key));
+
+          // In "missing" mode, skip fields that already have a translation
+          if (mode === "missing") {
+            fieldsToTranslate = fieldsToTranslate.filter((c) => {
+              const targetTranslation = resource.translatableContent.find(
+                (tc) => tc.key === c.key && tc.locale === targetLocale && tc.value.trim()
+              );
+              return !targetTranslation;
+            });
+          }
+
+          if (!fieldsToTranslate.length) continue;
+
+          try {
+            // Split into sub-batches of 50 to avoid Gemini JSON truncation on large resources
+            // (theme locale content can have 5000+ strings)
+            const GEMINI_BATCH_SIZE = 50;
+            const allTranslations: Array<{ key: string; value: string; digest: string }> = [];
+
+            for (let i = 0; i < fieldsToTranslate.length; i += GEMINI_BATCH_SIZE) {
+              const batch = fieldsToTranslate.slice(i, i + GEMINI_BATCH_SIZE);
+              const items = batch.map((c) => ({ key: c.key, source: c.value }));
+              const context = {
+                resourceType: "THEME",
+                resourceName: `${typeLabel} — ${resource.name}`,
+                fields: batch.map((c) => c.key),
+                glossary: Object.keys(glossary).length ? glossary : undefined,
+                brandName: brandName || undefined,
+              };
+
+              let geminiResult;
+              try {
+                geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model, context);
+              } catch (retryableError) {
+                if (isRetryableGeminiError(retryableError)) {
+                  console.log("[translateThemeContent] Rate limited, waiting 60s before retry...");
+                  await new Promise((resolve) => setTimeout(resolve, 60000));
+                  geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model, context);
+                } else {
+                  throw retryableError;
+                }
+              }
+
+              for (const c of batch) {
+                const value = geminiResult.translations[c.key] || "";
+                if (value && c.digest) {
+                  allTranslations.push({ key: c.key, value, digest: c.digest });
+                }
+              }
+
+              // Build glossary
+              const sourceTargetPairs = batch.map((c) => ({
+                source: c.value,
+                target: geminiResult.translations[c.key] || "",
+              }));
+              glossary = buildGlossary(sourceTargetPairs, glossary);
+            }
+
+            if (allTranslations.length) {
+              await withAdmin((a) => registerTranslations(a, resource.resourceId, targetLocale, allTranslations));
+            }
+          } catch (error) {
+            console.error(`[translateThemeContent] resource ${resource.resourceId} failed:`, error);
+          }
+
+          resourceCount++;
+          // Update progress every resource to show continuous progress
+          await prisma.contentTranslationJob.update({
+            where: { id: jobId },
+            data: { currentResourceCount: typeCompleted + resourceCount },
+          });
+        }
+
+        hasMore = result.hasNextPage;
+        cursor = result.endCursor;
+      }
+
+      console.log(`[translateThemeContent] ${resourceType}: done, ${resourceCount} resources processed`);
+    } catch (error) {
+      console.error(`[translateThemeContent] ${resourceType} failed:`, error);
+    }
+
+    typeCompleted++;
+    await prisma.contentTranslationJob.update({
+      where: { id: jobId },
+      data: { currentResourceCount: typeCompleted },
+    });
   }
-  const filesToTranslate = sourceFiles;
-  console.log("[translateThemeContent] files to translate:", filesToTranslate.map((f) => f.filename).join(", "));
-  let fileCount = 0;
 
-  for (const file of filesToTranslate) {
-    const isSchema = file.filename.endsWith(".schema.json");
-    const sourceLocale = localeFromFilename(file.filename);
-    const targetFilename = localeFilenameFor(file.filename, targetLocale);
-    console.log(`[translateThemeContent] processing ${file.filename} → ${targetFilename} (${isSchema ? "schema" : "content"})`);
+  console.log(`[translateThemeContent] Done. Processed ${THEME_RESOURCE_TYPES.length} theme resource types`);
 
-    // Read source content (use parseLocaleJson to handle comment headers)
-    const sourceJson = parseLocaleJson(file.content) as Record<string, unknown>;
-    const flatSource = flattenLocale(sourceJson);
-    console.log(`[translateThemeContent] ${file.filename}: ${Object.keys(flatSource).length} strings to translate`);
+  // ─── Direct locale file fallback ─────────────────────────────────────────
+  // The TranslatableResource API doesn't expose all theme strings (e.g. customer.*
+  // section, some content.* keys). Read the source locale file directly, find keys
+  // that are missing or identical-to-source in the target locale file, translate
+  // them, and write them back via upsertThemeLocale.
+  console.log("[translateThemeContent] Starting direct locale file fallback...");
+  const { getDashboardData, getThemeLocaleFiles, upsertThemeLocale } = await import("../lib/shopify-theme.server");
+  const { flattenLocale, mergeLocale, parseLocaleJson } = await import("../lib/locale");
 
-    // Read existing target file if it exists (for "missing" mode)
-    let existingTarget: Record<string, string> = {};
-    const targetFile = files.find((f) => f.filename === targetFilename);
-    if (targetFile) {
-      const targetJson = parseLocaleJson(targetFile.content) as Record<string, unknown>;
-      existingTarget = flattenLocale(targetJson);
+  const dashboard = await getDashboardData(admin);
+  const primaryLocale = dashboard.shopLocales.find((l) => l.primary);
+  if (!primaryLocale) {
+    console.log("[translateThemeContent] No primary locale, skipping fallback");
+    return;
+  }
+  const theme = dashboard.themes.find((t) => t.role === "main") || dashboard.themes[0];
+  if (!theme) {
+    console.log("[translateThemeContent] No theme found, skipping fallback");
+    return;
+  }
+
+  const allFiles = await withAdmin((a) => getThemeLocaleFiles(a, theme.id));
+
+  // Process both the main locale file and the schema file
+  const sourceFileNames = [
+    `locales/${primaryLocale.locale}.default.json`,
+    `locales/${primaryLocale.locale}.json`,
+    `locales/${primaryLocale.locale}.default.schema.json`,
+    `locales/${primaryLocale.locale}.schema.json`,
+  ];
+
+  for (const sourceFileName of sourceFileNames) {
+    const sourceFile = allFiles.find((f) => f.filename === sourceFileName);
+    if (!sourceFile) continue;
+
+    const isSchema = sourceFileName.endsWith(".schema.json");
+    const targetFileName = isSchema
+      ? `locales/${targetLocale}.schema.json`
+      : `locales/${targetLocale}.json`;
+
+    const jobCheck = await prisma.contentTranslationJob.findUnique({ where: { id: jobId } });
+    if (!jobCheck || jobCheck.status === "cancelled") return;
+
+    console.log(`[translateThemeContent] Fallback: comparing ${sourceFileName} → ${targetFileName}`);
+
+    const sourceJson = parseLocaleJson(sourceFile.content) as Record<string, unknown>;
+    const sourceFlat = flattenLocale(sourceJson);
+
+    const targetFile = allFiles.find((f) => f.filename === targetFileName);
+    const targetJson = targetFile ? parseLocaleJson(targetFile.content) as Record<string, unknown> : {};
+    const targetFlat = flattenLocale(targetJson);
+
+    // Find keys that are missing or (in force/all mode) identical to source
+    let keysToFill: Array<{ key: string; source: string }> = [];
+    for (const [key, sourceValue] of Object.entries(sourceFlat)) {
+      if (typeof sourceValue !== "string" || !sourceValue.trim()) continue;
+      const targetValue = targetFlat[key];
+      if (!targetValue || !targetValue.trim()) {
+        // Missing in target — always fill
+        keysToFill.push({ key, source: sourceValue });
+      } else if (mode === "force" && targetValue === sourceValue) {
+        // Force mode: re-translate identical strings
+        keysToFill.push({ key, source: sourceValue });
+      }
+      // In "all" mode: if it's identical to source, it might be a brand name or
+      // an already-correct translation. Skip — the API already tried.
+      // In "missing" mode: only fill missing, skip identical.
     }
 
-    // Filter keys based on mode
-    let keysToTranslate = Object.entries(flatSource);
-    if (mode === "missing") {
-      keysToTranslate = keysToTranslate.filter(([key]) => !existingTarget[key]?.trim());
-    }
-
-    if (!keysToTranslate.length) {
-      fileCount++;
+    if (!keysToFill.length) {
+      console.log(`[translateThemeContent] Fallback: ${sourceFileName} — no missing keys, skipping`);
       continue;
     }
 
-    // Group by top-level section for batched translation with context
-    const sections = new Map<string, Array<[string, string]>>();
-    for (const [key, value] of keysToTranslate) {
-      const section = key.split("/")[1] || "other"; // first segment after leading /
-      if (!sections.has(section)) sections.set(section, []);
-      sections.get(section)!.push([key, value]);
-    }
+    console.log(`[translateThemeContent] Fallback: ${sourceFileName} — ${keysToFill.length} keys to translate`);
 
-    const translations: Record<string, string> = {};
-    let sectionCount = 0;
-    const totalSections = sections.size;
+    // Translate in batches of 50
+    const BATCH_SIZE = 50;
+    const fallbackTranslations: Record<string, string> = {};
 
-    for (const [section, entries] of sections) {
-      const jobCheck = await prisma.contentTranslationJob.findUnique({ where: { id: jobId } });
-      if (!jobCheck || jobCheck.status === "cancelled") return;
-
-      const sectionLabel = THEME_SECTION_LABELS[section] || section;
-      const items = entries.map(([key, source]) => ({ key, source }));
+    for (let i = 0; i < keysToFill.length; i += BATCH_SIZE) {
+      const batch = keysToFill.slice(i, i + BATCH_SIZE);
+      const items = batch.map(({ key, source }) => ({ key, source }));
       const context = {
         resourceType: "THEME",
-        resourceName: `${isSchema ? "Theme settings schema" : "Theme content"} — ${sectionLabel}`,
-        fields: [section],
+        resourceName: isSchema ? "Theme settings schema (fallback)" : "Theme locale content (fallback)",
+        fields: batch.map((b) => b.key),
         glossary: Object.keys(glossary).length ? glossary : undefined,
+        brandName: brandName || undefined,
       };
 
       try {
         let geminiResult;
         try {
-          geminiResult = await translateBatch(items, sourceLocale, targetLocale, apiKey, model, context);
+          geminiResult = await translateBatch(items, primaryLocale.locale, targetLocale, apiKey, model, context);
         } catch (retryableError) {
           if (isRetryableGeminiError(retryableError)) {
-            console.log("[translateThemeContent] Rate limited, waiting 60s before retry...");
+            console.log("[translateThemeContent] Fallback: rate limited, waiting 60s...");
             await new Promise((resolve) => setTimeout(resolve, 60000));
-            geminiResult = await translateBatch(items, sourceLocale, targetLocale, apiKey, model, context);
+            geminiResult = await translateBatch(items, primaryLocale.locale, targetLocale, apiKey, model, context);
           } else {
             throw retryableError;
           }
         }
-        Object.assign(translations, geminiResult.translations);
-        // Build glossary from this section for consistency
-        const sourceTargetPairs = entries.map(([key, source]) => ({
+
+        for (const { key } of batch) {
+          const value = geminiResult.translations[key];
+          if (value) {
+            fallbackTranslations[key] = value;
+          }
+        }
+
+        // Build glossary
+        const sourceTargetPairs = batch.map(({ key, source }) => ({
           source,
           target: geminiResult.translations[key] || "",
         }));
         glossary = buildGlossary(sourceTargetPairs, glossary);
       } catch (error) {
-        console.error(`[translateThemeContent] section ${section} failed:`, error);
+        console.error(`[translateThemeContent] Fallback batch ${i} failed:`, error);
       }
 
-      sectionCount++;
+      // Update progress
       await prisma.contentTranslationJob.update({
         where: { id: jobId },
-        data: { currentResourceCount: sectionCount, totalResourceCount: totalSections },
+        data: { currentResourceCount: typeCompleted + Math.min(i + BATCH_SIZE, keysToFill.length) },
       });
     }
 
-    // Merge translations into existing target (if any) and write back
-    const baseJson = targetFile ? parseLocaleJson(targetFile.content) as Record<string, unknown> : structuredClone(sourceJson);
-    const merged = mergeLocale(baseJson, translations);
-    try {
-      await upsertThemeLocale(admin, theme.id, targetFilename, merged);
-    } catch (error: unknown) {
-      // Re-authenticate on 401 and retry
-      const is401 = error instanceof Error && ("response" in error) && (error as { response?: { code?: number } }).response?.code === 401;
-      if (is401) {
-        console.log("[translateThemeContent] Token expired (401), re-authenticating...");
-        admin = await getAdmin();
-        await upsertThemeLocale(admin, theme.id, targetFilename, merged);
-      } else {
-        throw error;
-      }
+    if (Object.keys(fallbackTranslations).length === 0) {
+      console.log(`[translateThemeContent] Fallback: ${sourceFileName} — no translations produced, skipping write`);
+      continue;
     }
-    fileCount++;
+
+    // Merge fallback translations into existing target and write back
+    const baseJson = targetFile ? parseLocaleJson(targetFile.content) as Record<string, unknown> : structuredClone(sourceJson);
+    const merged = mergeLocale(baseJson, fallbackTranslations);
+
+    console.log(`[translateThemeContent] Fallback: writing ${Object.keys(fallbackTranslations).length} translations to ${targetFileName}`);
+    try {
+      await withAdmin((a) => upsertThemeLocale(a, theme.id, targetFileName, merged));
+    } catch (error) {
+      console.error(`[translateThemeContent] Fallback: failed to write ${targetFileName}:`, error);
+    }
   }
 
-  // Now translate template and section group JSON files (app embeds, section groups, static sections, templates)
-  // The text is hardcoded in template files, but we DON'T modify the templates — instead we write
-  // translations as overrides into the target locale file (e.g., locales/lv.json).
-  // Shopify's rendering engine checks the locale file first and uses it instead of the hardcoded value.
-  console.log("[translateThemeContent] Fetching template and section group JSON files...");
-  const jsonFiles = await getThemeJsonFiles(admin, theme.id);
+  console.log("[translateThemeContent] Direct locale file fallback complete");
+
+  // ─── Section group & template JSON fallback ──────────────────────────────
+  // Section group files (sections/*-group.json) and template files (templates/*.json)
+  // contain hardcoded translatable text in their `settings` objects. The
+  // TranslatableResource API doesn't always expose these. Read the JSON files
+  // directly, extract translatable fields, translate them, and write the
+  // translations as overrides into the target locale file.
+  console.log("[translateThemeContent] Starting section group & template fallback...");
+  const { getThemeJsonFiles, extractTranslatableFromThemeJson } = await import("../lib/shopify-theme.server");
+
+  const jsonFiles = await withAdmin((a) => getThemeJsonFiles(a, theme.id));
   console.log(`[translateThemeContent] Found ${jsonFiles.length} template/section JSON files`);
 
-  // We'll collect all translations and merge them into the target locale file at the end
-  const templateTranslations: Record<string, string> = {}; // flat key → translated value
+  // Collect all translations and merge into the target locale file at the end
+  const templateTranslations: Record<string, string> = {}; // flat locale key → translated value
 
-  for (const jsonFile of jsonFiles) {
+  for (let fileIdx = 0; fileIdx < jsonFiles.length; fileIdx++) {
+    const jsonFile = jsonFiles[fileIdx];
     const jobCheck = await prisma.contentTranslationJob.findUnique({ where: { id: jobId } });
     if (!jobCheck || jobCheck.status === "cancelled") return;
 
@@ -319,13 +475,10 @@ async function translateThemeContent(
       const sourceJson = parseLocaleJson(jsonFile.content) as Record<string, unknown>;
       const translatableFields = extractTranslatableFromThemeJson(sourceJson);
 
-      if (!translatableFields.length) {
-        continue;
-      }
+      if (!translatableFields.length) continue;
 
-      console.log(`[translateThemeContent] ${jsonFile.filename}: ${translatableFields.length} translatable strings`);
+      console.log(`[translateThemeContent] Template fallback: ${jsonFile.filename}: ${translatableFields.length} translatable strings`);
 
-      // Translate in batches of 30 fields
       const BATCH_SIZE = 30;
 
       for (let i = 0; i < translatableFields.length; i += BATCH_SIZE) {
@@ -336,17 +489,18 @@ async function translateThemeContent(
           resourceName: `Theme template — ${jsonFile.filename}`,
           fields: batch.map((f) => f.key),
           glossary: Object.keys(glossary).length ? glossary : undefined,
+          brandName: brandName || undefined,
         };
 
         try {
           let geminiResult;
           try {
-            geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model, context);
+            geminiResult = await translateBatch(items, primaryLocale.locale, targetLocale, apiKey, model, context);
           } catch (retryableError) {
             if (isRetryableGeminiError(retryableError)) {
-              console.log("[translateThemeContent] Rate limited, waiting 60s before retry...");
+              console.log("[translateThemeContent] Template fallback: rate limited, waiting 60s...");
               await new Promise((resolve) => setTimeout(resolve, 60000));
-              geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model, context);
+              geminiResult = await translateBatch(items, primaryLocale.locale, targetLocale, apiKey, model, context);
             } else {
               throw retryableError;
             }
@@ -356,7 +510,7 @@ async function translateThemeContent(
           for (let j = 0; j < batch.length; j++) {
             const translatedValue = geminiResult.translations[String(j)];
             if (translatedValue && translatedValue !== batch[j].value) {
-              // Convert path array to locale file flat key: ["sections","foo","settings","text"] → "/sections/foo/settings/text"
+              // Path: ["sections","header-group","settings","heading"] → "/sections/header-group/settings/heading"
               const localeKey = "/" + batch[j].path.map((s) => s.replaceAll("~", "~0").replaceAll("/", "~1")).join("/");
               templateTranslations[localeKey] = translatedValue;
             }
@@ -369,38 +523,37 @@ async function translateThemeContent(
           }));
           glossary = buildGlossary(sourceTargetPairs, glossary);
         } catch (error) {
-          console.error(`[translateThemeContent] ${jsonFile.filename} batch ${i} failed:`, error);
+          console.error(`[translateThemeContent] Template fallback: ${jsonFile.filename} batch ${i} failed:`, error);
         }
       }
     } catch (error) {
-      console.error(`[translateThemeContent] ${jsonFile.filename} failed:`, error);
+      console.error(`[translateThemeContent] Template fallback: ${jsonFile.filename} failed:`, error);
     }
+
+    // Update progress
+    await prisma.contentTranslationJob.update({
+      where: { id: jobId },
+      data: { currentResourceCount: typeCompleted + fileIdx + 1 },
+    });
   }
 
   // Merge template translations into the target locale file and write it
   if (Object.keys(templateTranslations).length) {
-    console.log(`[translateThemeContent] Merging ${Object.keys(templateTranslations).length} template translations into locale file`);
+    console.log(`[translateThemeContent] Template fallback: merging ${Object.keys(templateTranslations).length} translations into locale file`);
     const targetLocaleFilename = `locales/${targetLocale}.json`;
-    const targetLocaleFile = files.find((f) => f.filename === targetLocaleFilename);
+    const targetLocaleFile = allFiles.find((f) => f.filename === targetLocaleFilename);
     const baseLocaleJson = targetLocaleFile ? parseLocaleJson(targetLocaleFile.content) as Record<string, unknown> : {};
     const mergedLocale = mergeLocale(baseLocaleJson, templateTranslations);
 
     try {
-      await upsertThemeLocale(admin, theme.id, targetLocaleFilename, mergedLocale);
-      console.log(`[translateThemeContent] Wrote ${targetLocaleFilename} with template translations`);
-    } catch (error: unknown) {
-      const is401 = error instanceof Error && ("response" in error) && (error as { response?: { code?: number } }).response?.code === 401;
-      if (is401) {
-        console.log("[translateThemeContent] Token expired (401), re-authenticating...");
-        admin = await getAdmin();
-        await upsertThemeLocale(admin, theme.id, targetLocaleFilename, mergedLocale);
-      } else {
-        throw error;
-      }
+      await withAdmin((a) => upsertThemeLocale(a, theme.id, targetLocaleFilename, mergedLocale));
+      console.log(`[translateThemeContent] Template fallback: wrote ${targetLocaleFilename} with template translations`);
+    } catch (error) {
+      console.error(`[translateThemeContent] Template fallback: failed to write ${targetLocaleFilename}:`, error);
     }
   }
 
-  console.log(`[translateThemeContent] Done. Processed locale files + ${jsonFiles.length} template/section files`);
+  console.log("[translateThemeContent] Section group & template fallback complete");
 }
 
 async function translateResources(
@@ -411,6 +564,7 @@ async function translateResources(
   model: string,
   jobId: string,
   mode: "all" | "force" | "missing" = "all",
+  brandName?: string | null,
 ) {
   const { getTranslatableResources, registerTranslations } = await import("../lib/shopify-translations.server");
   const { translateBatch, isRetryableGeminiError, buildGlossary } = await import("../lib/gemini.server");
@@ -444,7 +598,7 @@ async function translateResources(
     // Theme content is translated differently — via locale JSON files, not the TranslatableResource API
     if (resourceType === "THEME") {
       try {
-        await translateThemeContent(async () => admin, shop, targetLocale, apiKey, model, jobId, mode);
+        await translateThemeContent(async () => (await unauthenticated.admin(shop)).admin, shop, targetLocale, apiKey, model, jobId, mode, brandName);
       } catch (error) {
         console.error("[translateResources] THEME failed:", error);
       }
@@ -494,39 +648,48 @@ async function translateResources(
           }
 
           try {
-            const items = fieldsToTranslate.map((c) => ({ key: c.key, source: c.value }));
-            const context = {
-              resourceType,
-              resourceName: resource.name,
-              fields: fieldsToTranslate.map((c) => c.key),
-              glossary: Object.keys(glossary).length ? glossary : undefined,
-            };
-            let geminiResult;
-            try {
-              geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model, context);
-            } catch (retryableError) {
-              if (isRetryableGeminiError(retryableError)) {
-                // Wait 60s and retry once for rate limits
-                console.log("[translateResources] Rate limited, waiting 60s before retry...");
-                await new Promise((resolve) => setTimeout(resolve, 60000));
+            // Split into sub-batches of 50 to avoid Gemini JSON truncation on large resources
+            const GEMINI_BATCH_SIZE = 50;
+            const allTranslations: Array<{ key: string; value: string; digest: string }> = [];
+
+            for (let i = 0; i < fieldsToTranslate.length; i += GEMINI_BATCH_SIZE) {
+              const batch = fieldsToTranslate.slice(i, i + GEMINI_BATCH_SIZE);
+              const items = batch.map((c) => ({ key: c.key, source: c.value }));
+              const context = {
+                resourceType,
+                resourceName: resource.name,
+                fields: batch.map((c) => c.key),
+                glossary: Object.keys(glossary).length ? glossary : undefined,
+                brandName: brandName || undefined,
+              };
+              let geminiResult;
+              try {
                 geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model, context);
-              } else {
-                throw retryableError;
+              } catch (retryableError) {
+                if (isRetryableGeminiError(retryableError)) {
+                  // Wait 60s and retry once for rate limits
+                  console.log("[translateResources] Rate limited, waiting 60s before retry...");
+                  await new Promise((resolve) => setTimeout(resolve, 60000));
+                  geminiResult = await translateBatch(items, "en", targetLocale, apiKey, model, context);
+                } else {
+                  throw retryableError;
+                }
               }
-            }
-            const translations = fieldsToTranslate.map((c) => ({
-              key: c.key,
-              value: geminiResult.translations[c.key] || "",
-              digest: c.digest,
-            })).filter((t) => t.value && t.digest);
-            if (translations.length) {
-              await withAdmin((a) => registerTranslations(a, resource.resourceId, targetLocale, translations));
+              for (const c of batch) {
+                const value = geminiResult.translations[c.key] || "";
+                if (value && c.digest) {
+                  allTranslations.push({ key: c.key, value, digest: c.digest });
+                }
+              }
               // Build glossary from this translation for consistency in subsequent batches
-              const sourceTargetPairs = fieldsToTranslate.map((c) => ({
+              const sourceTargetPairs = batch.map((c) => ({
                 source: c.value,
                 target: geminiResult.translations[c.key] || "",
               }));
               glossary = buildGlossary(sourceTargetPairs, glossary);
+            }
+            if (allTranslations.length) {
+              await withAdmin((a) => registerTranslations(a, resource.resourceId, targetLocale, allTranslations));
             }
           } catch (error) {
             console.error(`[translateResources] resource ${resource.resourceId} failed:`, error);
@@ -614,6 +777,7 @@ export default function LanguagesPage() {
   }
   const getJob = (locale: string, resourceType: string) =>
     jobByKey.get(`${locale}:${resourceType}`) ||
+    jobByKey.get(`${locale}:${resourceType}_FORCE`) ||
     jobByKey.get(`${locale}:ALL`) ||
     jobByKey.get(`${locale}:ALL_FORCE`) ||
     jobByKey.get(`${locale}:ALL_MISSING`);
@@ -732,10 +896,10 @@ export default function LanguagesPage() {
                           <thead style={TABLE_STYLES.thead}>
                             <tr>
                               <th style={{ ...TABLE_STYLES.th, width: "15%" }}>Category</th>
-                              <th style={{ ...TABLE_STYLES.th, width: "25%" }}>Resource type</th>
-                              <th style={{ ...TABLE_STYLES.th, width: "15%" }}>Status</th>
+                              <th style={{ ...TABLE_STYLES.th, width: "22%" }}>Resource type</th>
+                              <th style={{ ...TABLE_STYLES.th, width: "13%" }}>Status</th>
                               <th style={{ ...TABLE_STYLES.th, width: "25%" }}>Progress</th>
-                              <th style={{ ...TABLE_STYLES.th, width: "20%" }}>Action</th>
+                              <th style={{ ...TABLE_STYLES.th, width: "25%" }}>Action</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -805,18 +969,32 @@ export default function LanguagesPage() {
                                     </td>
                                     <td style={TABLE_STYLES.td}>
                                       {!isThisCategoryActive && !isThisCategoryQueued && (
-                                        <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`cat-${lang.locale}-${rt}`)}>
-                                          <input type="hidden" name="intent" value="translateCategory" />
-                                          <input type="hidden" name="targetLocale" value={lang.locale} />
-                                          <input type="hidden" name="resourceType" value={rt} />
-                                          <s-button
-                                            type="submit"
-                                            loading={(submittingForm === `cat-${lang.locale}-${rt}` && isSubmitting) || undefined}
-                                            disabled={(isActive || anyCategoryActive) || undefined}
-                                          >
-                                            Translate
-                                          </s-button>
-                                        </fetcher.Form>
+                                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                          <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`cat-${lang.locale}-${rt}`)}>
+                                            <input type="hidden" name="intent" value="translateCategory" />
+                                            <input type="hidden" name="targetLocale" value={lang.locale} />
+                                            <input type="hidden" name="resourceType" value={rt} />
+                                            <s-button
+                                              type="submit"
+                                              loading={(submittingForm === `cat-${lang.locale}-${rt}` && isSubmitting) || undefined}
+                                              disabled={(isActive || anyCategoryActive) || undefined}
+                                            >
+                                              Translate
+                                            </s-button>
+                                          </fetcher.Form>
+                                          <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`forcecat-${lang.locale}-${rt}`)}>
+                                            <input type="hidden" name="intent" value="forceTranslateCategory" />
+                                            <input type="hidden" name="targetLocale" value={lang.locale} />
+                                            <input type="hidden" name="resourceType" value={rt} />
+                                            <s-button
+                                              type="submit"
+                                              loading={(submittingForm === `forcecat-${lang.locale}-${rt}` && isSubmitting) || undefined}
+                                              disabled={(isActive || anyCategoryActive) || undefined}
+                                            >
+                                              Force
+                                            </s-button>
+                                          </fetcher.Form>
+                                        </div>
                                       )}
                                     </td>
                                   </tr>

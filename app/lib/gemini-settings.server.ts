@@ -35,5 +35,6 @@ export async function getShopGeminiConfiguration(shop: string) {
     model: parseGeminiModel(settings.geminiModel),
     batchSize: settings.batchSize,
     lazyLoadPageSize: settings.lazyLoadPageSize ?? 20,
+    brandName: settings.brandName ?? null,
   };
 }

@@ -20,7 +20,14 @@ export type ResourceType =
   | "LINK"
   | "SHOP"
   | "SHOP_POLICY"
-  | "METAOBJECT";
+  | "METAOBJECT"
+  | "ONLINE_STORE_THEME"
+  | "ONLINE_STORE_THEME_JSON_TEMPLATE"
+  | "ONLINE_STORE_THEME_SECTION_GROUP"
+  | "ONLINE_STORE_THEME_APP_EMBED"
+  | "ONLINE_STORE_THEME_LOCALE_CONTENT"
+  | "ONLINE_STORE_THEME_SETTINGS_CATEGORY"
+  | "ONLINE_STORE_THEME_SETTINGS_DATA_SECTIONS";
 
 export type TranslatableContent = {
   key: string;
@@ -403,31 +410,42 @@ export async function registerTranslations(
 ) {
   if (!translations.length) return { registered: 0, errors: [] };
 
-  const data = await graphql<TranslationsRegisterData>(
-    admin,
-    `#graphql
-      mutation RegisterTranslations(
-        $resourceId: ID!
-        $translations: [TranslationInput!]!
-      ) {
-        translationsRegister(resourceId: $resourceId, translations: $translations) {
-          translations { key value }
-          userErrors { message field }
-        }
-      }`,
-    {
-      resourceId,
-      translations: translations.map((t) => ({
-        key: t.key,
-        value: t.value,
-        locale,
-        translatableContentDigest: t.digest,
-      })),
-    },
-  );
+  // Shopify limits translationsRegister to 250 items per call — chunk to 200 for safety
+  const CHUNK_SIZE = 200;
+  let totalRegistered = 0;
+  const allErrors: string[] = [];
+
+  for (let i = 0; i < translations.length; i += CHUNK_SIZE) {
+    const chunk = translations.slice(i, i + CHUNK_SIZE);
+    const data = await graphql<TranslationsRegisterData>(
+      admin,
+      `#graphql
+        mutation RegisterTranslations(
+          $resourceId: ID!
+          $translations: [TranslationInput!]!
+        ) {
+          translationsRegister(resourceId: $resourceId, translations: $translations) {
+            translations { key value }
+            userErrors { message field }
+          }
+        }`,
+      {
+        resourceId,
+        translations: chunk.map((t) => ({
+          key: t.key,
+          value: t.value,
+          locale,
+          translatableContentDigest: t.digest,
+        })),
+      },
+    );
+
+    totalRegistered += data.translationsRegister.translations?.length ?? 0;
+    allErrors.push(...(data.translationsRegister.userErrors ?? []).map((e) => `${e.field.join(".")}: ${e.message}`));
+  }
 
   return {
-    registered: data.translationsRegister.translations.length,
-    errors: data.translationsRegister.userErrors.map((e) => `${e.field.join(".")}: ${e.message}`),
+    registered: totalRegistered,
+    errors: allErrors,
   };
 }

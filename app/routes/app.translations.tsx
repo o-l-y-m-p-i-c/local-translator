@@ -134,6 +134,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               resourceName: resource.name,
               fields: translatable.map((c) => c.key),
               glossary: Object.keys(glossary).length ? glossary : undefined,
+              brandName: configuration.brandName || undefined,
             };
             const geminiResult = await translateBatch(items, "en", targetLocale, configuration.apiKey, configuration.model, context);
             const translations = translatable.map((c) => ({
@@ -191,7 +192,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         targetLocale,
         configuration.apiKey,
         configuration.model,
-        { resourceType, fields: keys },
+        { resourceType, fields: keys, brandName: configuration.brandName || undefined },
       );
 
       const translations = keys.map((key, i) => ({

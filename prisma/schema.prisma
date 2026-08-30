@@ -41,6 +41,7 @@ model ShopSettings {
   geminiModel           String   @default("gemini-2.5-flash")
   batchSize             Int      @default(30)
   lazyLoadPageSize      Int      @default(20)
+  brandName             String?  // brand name to exclude from translation (e.g. "Noonchi Organic")
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 }
