@@ -65,6 +65,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { ok: true, message: `Cancelled translation jobs for ${targetLocale}` };
   }
 
+  if (intent === "cancelCategory") {
+    // Cancel only a specific category's job
+    await prisma.contentTranslationJob.updateMany({
+      where: { shop: session.shop, targetLocale, status: { in: ["pending", "active"] } },
+      data: { status: "cancelled", completedAt: new Date() },
+    });
+    return { ok: true, message: `Cancelled ${resourceType} translation for ${targetLocale}` };
+  }
+
   if (intent === "translateFull" || intent === "translateCategory" || intent === "forceTranslate" || intent === "forceTranslateCategory" || intent === "translateMissing") {
     const { getShopGeminiConfiguration } = await import("../lib/gemini-settings.server");
     const configuration = await getShopGeminiConfiguration(session.shop);
@@ -137,7 +146,7 @@ async function translateThemeContent(
   jobId: string,
   mode: "all" | "force" | "missing",
   brandName?: string | null,
-  provider: "gemini" | "glm" = "gemini",
+  provider: "gemini" | "glm" | "minimax" | "groq" = "gemini",
 ) {
   const { getTranslatableResources, registerTranslations } = await import("../lib/shopify-translations.server");
   const { translateBatchProvider, isRetryableError, buildGlossary } = await import("../lib/gemini.server");
@@ -236,9 +245,10 @@ async function translateThemeContent(
           if (!fieldsToTranslate.length) continue;
 
           try {
-            // Split into sub-batches of 50 to avoid Gemini JSON truncation on large resources
-            // (theme locale content can have 5000+ strings)
-            const GEMINI_BATCH_SIZE = 50;
+            // Split into sub-batches to avoid JSON truncation on large resources
+            // GLM free tier (1 concurrent) — very small batches to avoid timeout
+            // Groq free tier — very low TPM (8K for gpt-oss, 12K for llama-70b), needs tiny batches
+            const GEMINI_BATCH_SIZE = provider === "glm" ? 10 : provider === "groq" ? 3 : 50;
             const allTranslations: Array<{ key: string; value: string; digest: string }> = [];
 
             for (let i = 0; i < fieldsToTranslate.length; i += GEMINI_BATCH_SIZE) {
@@ -397,8 +407,8 @@ async function translateThemeContent(
 
     console.log(`[translateThemeContent] Fallback: ${sourceFileName} — ${keysToFill.length} keys to translate`);
 
-    // Translate in batches of 50
-    const BATCH_SIZE = 50;
+    // Translate in batches — Groq has very low TPM (8K-12K), needs tiny batches
+    const BATCH_SIZE = provider === "glm" ? 10 : provider === "groq" ? 3 : 50;
     const fallbackTranslations: Record<string, string> = {};
 
     for (let i = 0; i < keysToFill.length; i += BATCH_SIZE) {
@@ -504,7 +514,7 @@ async function translateThemeContent(
       console.log(`[translateThemeContent] Template fallback: ${jsonFile.filename}: ${translatableFields.length} translatable strings`);
       await setStatus(`Template ${jsonFile.filename}: ${translatableFields.length} strings to translate (${fileIdx + 1}/${jsonFiles.length})`);
 
-      const BATCH_SIZE = 30;
+      const BATCH_SIZE = provider === "glm" ? 8 : provider === "groq" ? 2 : 30;
 
       for (let i = 0; i < translatableFields.length; i += BATCH_SIZE) {
         const batch = translatableFields.slice(i, i + BATCH_SIZE);
@@ -590,7 +600,7 @@ async function translateResources(
   jobId: string,
   mode: "all" | "force" | "missing" = "all",
   brandName?: string | null,
-  provider: "gemini" | "glm" = "gemini",
+  provider: "gemini" | "glm" | "minimax" | "groq" = "gemini",
 ) {
   const { getTranslatableResources, registerTranslations } = await import("../lib/shopify-translations.server");
   const { translateBatchProvider, isRetryableError, buildGlossary } = await import("../lib/gemini.server");
@@ -685,8 +695,10 @@ async function translateResources(
           }
 
           try {
-            // Split into sub-batches of 50 to avoid Gemini JSON truncation on large resources
-            const GEMINI_BATCH_SIZE = 50;
+            // Split into sub-batches to avoid JSON truncation on large resources
+            // GLM free tier (1 concurrent) — very small batches to avoid timeout
+            // Groq free tier — very low TPM (8K for gpt-oss, 12K for llama-70b), needs tiny batches
+            const GEMINI_BATCH_SIZE = provider === "glm" ? 10 : provider === "groq" ? 3 : 50;
             const allTranslations: Array<{ key: string; value: string; digest: string }> = [];
 
             for (let i = 0; i < fieldsToTranslate.length; i += GEMINI_BATCH_SIZE) {
@@ -1020,6 +1032,19 @@ export default function LanguagesPage() {
                                       ) : <span style={{ color: "#999", fontSize: 12 }}>—</span>}
                                     </td>
                                     <td style={TABLE_STYLES.td}>
+                                      {isThisCategoryActive && (
+                                        <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`cancelcat-${lang.locale}-${rt}`)}>
+                                          <input type="hidden" name="intent" value="cancel" />
+                                          <input type="hidden" name="targetLocale" value={lang.locale} />
+                                          <s-button
+                                            type="submit"
+                                            tone="critical"
+                                            loading={(submittingForm === `cancelcat-${lang.locale}-${rt}` && isSubmitting) || undefined}
+                                          >
+                                            Cancel
+                                          </s-button>
+                                        </fetcher.Form>
+                                      )}
                                       {!isThisCategoryActive && !isThisCategoryQueued && (
                                         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                                           <fetcher.Form method="post" style={{ display: "inline" }} onSubmit={() => setSubmittingForm(`cat-${lang.locale}-${rt}`)}>

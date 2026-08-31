@@ -1,56 +1,53 @@
 /**
- * GLM (Z.ai / Zhipu AI) API client.
- * The Z.ai API is OpenAI-compatible: https://api.z.ai/api/paas/v4/chat/completions
- * Free models: glm-4.5-flash, glm-4.7-flash
- * Paid models: glm-5.2, glm-4.5, glm-4.5-air, etc.
+ * MiniMax API client.
+ * MiniMax is OpenAI-compatible: https://api.minimax.io/v1/chat/completions
+ * Models: MiniMax-M3 (1M context), MiniMax-M2.7, MiniMax-M2.5, etc.
  *
- * Uses streaming mode to avoid timeouts on the free tier (1 concurrent request).
- * The free tier can queue requests for a long time; streaming keeps the
- * connection alive and delivers tokens incrementally.
+ * Paid API (no free tier for text models) — user must top up balance.
+ * Rate limits (paid): 200–500 RPM, 10M–20M TPM.
+ * Uses streaming mode for consistency with GLM client.
  */
 
 import { validatePlaceholders } from "./locale";
 import { localeDisplayName, promptFor, type TranslationItem, type TranslationContext, type GeminiUsage } from "./gemini.server";
 
-const GLM_API_URLS = [
-  "https://api.z.ai/api/paas/v4/chat/completions",
-  "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+const MINIMAX_API_URLS = [
+  "https://api.minimax.io/v1/chat/completions",
 ];
 
-export class GlmApiError extends Error {
+export class MinimaxApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
     super(message);
-    this.name = "GlmApiError";
+    this.name = "MinimaxApiError";
     this.status = status;
   }
 }
 
-export function isRetryableGlmError(error: unknown) {
-  if (error instanceof GlmApiError && (error.status === 429 || error.status >= 500)) return true;
+export function isRetryableMinimaxError(error: unknown) {
+  if (error instanceof MinimaxApiError && (error.status === 429 || error.status >= 500)) return true;
   if (error instanceof TypeError && error.message.includes("fetch failed")) return true;
-  if (error instanceof Error && error.message.includes("GLM API timeout")) return true;
+  if (error instanceof Error && error.message.includes("MiniMax API timeout")) return true;
   if (error instanceof Error && error.message.includes("aborted")) return true;
   if (error instanceof Error && error.message.includes("network")) return true;
   return false;
 }
 
 /**
- * Retry with exponential backoff for GLM errors.
- * GLM free tier has 1 concurrent request — timeouts are common under load.
- * Waits: 10s, 20s, 40s, 60s between attempts.
+ * Retry with exponential backoff for MiniMax errors.
+ * Waits: 5s, 10s, 20s, 40s between attempts.
  */
-async function withGlmRetry<T>(fn: () => Promise<T>, maxRetries = 4): Promise<T> {
+async function withMinimaxRetry<T>(fn: () => Promise<T>, maxRetries = 4): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
     } catch (error) {
       lastError = error;
-      if (attempt === maxRetries || !isRetryableGlmError(error)) throw error;
-      const delay = Math.min(10000 * Math.pow(2, attempt), 60000);
-      const errorDetail = error instanceof GlmApiError ? `status ${error.status}` : error instanceof Error ? error.message : String(error);
-      console.log(`[translateBatchGlm] Retryable error (${errorDetail}), waiting ${delay / 1000}s before retry ${attempt + 1}/${maxRetries}...`);
+      if (attempt === maxRetries || !isRetryableMinimaxError(error)) throw error;
+      const delay = Math.min(5000 * Math.pow(2, attempt), 60000);
+      const errorDetail = error instanceof MinimaxApiError ? `status ${error.status}` : error instanceof Error ? error.message : String(error);
+      console.log(`[translateBatchMinimax] Retryable error (${errorDetail}), waiting ${delay / 1000}s before retry ${attempt + 1}/${maxRetries}...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -58,10 +55,10 @@ async function withGlmRetry<T>(fn: () => Promise<T>, maxRetries = 4): Promise<T>
 }
 
 /**
- * Translate a batch of strings using GLM (Z.ai) API.
+ * Translate a batch of strings using MiniMax API.
  * OpenAI-compatible chat completions endpoint.
  */
-export async function translateBatchGlm(
+export async function translateBatchMinimax(
   items: TranslationItem[],
   sourceLocale: string,
   targetLocale: string,
@@ -78,7 +75,7 @@ export async function translateBatchGlm(
 
   const prompt = promptFor(items, sourceLocale, targetLocale, context);
 
-  const body = {
+  const body: Record<string, unknown> = {
     model,
     messages: [
       {
@@ -93,19 +90,22 @@ export async function translateBatchGlm(
     temperature: 0.2,
     response_format: { type: "json_object" },
     max_tokens: 16384,
-    stream: true, // Streaming keeps connection alive — prevents timeout on free tier
+    stream: true,
   };
+
+  // MiniMax M3 supports "thinking" — disable for translation to reduce token usage
+  if (model.toLowerCase().includes("m3")) {
+    body.thinking = { type: "disabled" };
+  }
 
   // Try each API endpoint until one works
   let lastError: unknown;
-  for (const apiUrl of GLM_API_URLS) {
+  for (const apiUrl of MINIMAX_API_URLS) {
     try {
-      // Use AbortController with a generous timeout (5 min) — streaming keeps
-      // the connection alive, but if GLM never starts sending data, we abort.
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300_000);
+      const timeoutId = setTimeout(() => controller.abort(), 180_000);
 
-      const response = await withGlmRetry(() => fetch(apiUrl, {
+      const response = await withMinimaxRetry(() => fetch(apiUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -119,11 +119,10 @@ export async function translateBatchGlm(
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => response.statusText);
-        throw new GlmApiError(`GLM API error ${response.status}: ${errorText}`, response.status);
+        throw new MinimaxApiError(`MiniMax API error ${response.status}: ${errorText}`, response.status);
       }
 
       // Read streaming response — accumulate chunks until done
-      // This keeps the connection alive even if GLM takes a while to start generating
       let fullContent = "";
       let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } = {};
 
@@ -137,9 +136,8 @@ export async function translateBatchGlm(
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
 
-          // Process complete SSE lines
           const lines = buffer.split("\n");
-          buffer = lines.pop() || ""; // keep incomplete line in buffer
+          buffer = lines.pop() || "";
 
           for (const line of lines) {
             const trimmed = line.trim();
@@ -161,7 +159,6 @@ export async function translateBatchGlm(
           }
         }
       } else {
-        // Fallback: no streaming body, read as JSON
         const data = await response.json() as {
           choices?: Array<{ message?: { content?: string } }>;
           usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
@@ -170,19 +167,18 @@ export async function translateBatchGlm(
         usage = data.usage || {};
       }
 
-      if (!fullContent) throw new Error("GLM returned an empty response");
+      if (!fullContent) throw new Error("MiniMax returned an empty response");
 
       // Parse the accumulated JSON content
       let parsed: { translations?: Array<{ key?: unknown; translation?: unknown }> };
       try {
         parsed = JSON.parse(fullContent);
       } catch {
-        // Try to extract JSON from markdown code blocks
         const jsonMatch = fullContent.match(/```(?:json)?\s*([\s\S]*?)```/);
         if (jsonMatch) {
           parsed = JSON.parse(jsonMatch[1]);
         } else {
-          throw new Error(`GLM returned non-JSON response: ${fullContent.slice(0, 200)}`);
+          throw new Error(`MiniMax returned non-JSON response: ${fullContent.slice(0, 200)}`);
         }
       }
 
@@ -195,7 +191,7 @@ export async function translateBatchGlm(
         if (source === undefined || result.key in translations) continue;
         const invalid = validatePlaceholders(source, result.translation);
         if (invalid.length) {
-          console.log(`[translateBatchGlm] Skipping key "${result.key}" — GLM changed protected tokens: ${invalid.join(", ")}`);
+          console.log(`[translateBatchMinimax] Skipping key "${result.key}" — MiniMax changed protected tokens: ${invalid.join(", ")}`);
           translations[result.key] = source;
           continue;
         }
@@ -204,7 +200,7 @@ export async function translateBatchGlm(
 
       const missing = items.filter(({ key }) => !(key in translations));
       if (missing.length) {
-        console.log(`[translateBatchGlm] GLM omitted ${missing.length} translation(s), returning partial results`);
+        console.log(`[translateBatchMinimax] MiniMax omitted ${missing.length} translation(s), returning partial results`);
       }
 
       // Post-translation check: detect unchanged strings and retry with force mode
@@ -213,9 +209,9 @@ export async function translateBatchGlm(
           translations[key] === source && source.trim().length > 0
         );
         if (untranslated.length) {
-          console.log(`[translateBatchGlm] ${untranslated.length} string(s) returned unchanged, retrying with force mode...`);
+          console.log(`[translateBatchMinimax] ${untranslated.length} string(s) returned unchanged, retrying with force mode...`);
           const retryContext = { ...context, force: true };
-          const retryResult = await translateBatchGlm(untranslated, sourceLocale, targetLocale, apiKey, model, retryContext);
+          const retryResult = await translateBatchMinimax(untranslated, sourceLocale, targetLocale, apiKey, model, retryContext);
           for (const { key } of untranslated) {
             const retried = retryResult.translations[key];
             if (retried && retried !== translations[key]) {
@@ -236,9 +232,8 @@ export async function translateBatchGlm(
       };
     } catch (error) {
       lastError = error;
-      console.log(`[translateBatchGlm] Endpoint ${apiUrl} failed: ${error instanceof Error ? error.message : String(error)}`);
-      // Try next endpoint
+      console.log(`[translateBatchMinimax] Endpoint ${apiUrl} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  throw lastError || new Error("All GLM API endpoints failed");
+  throw lastError || new Error("All MiniMax API endpoints failed");
 }

@@ -16,10 +16,31 @@ export const GLM_MODELS = [
   "glm-5.2",
 ] as const;
 
-export const AI_PROVIDERS = ["gemini", "glm"] as const;
+export const MINIMAX_MODELS = [
+  "MiniMax-M3",
+  "MiniMax-M2.7",
+  "MiniMax-M2.7-highspeed",
+  "MiniMax-M2.5",
+  "MiniMax-M2.5-highspeed",
+  "MiniMax-M2.1",
+  "MiniMax-M2",
+] as const;
+
+export const GROQ_MODELS = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "qwen/qwen3-32b",
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
+] as const;
+
+export const AI_PROVIDERS = ["gemini", "glm", "minimax", "groq"] as const;
 
 export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 export const DEFAULT_GLM_MODEL = "glm-4.5-flash";
+export const DEFAULT_MINIMAX_MODEL = "MiniMax-M3";
+export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
 export const DEFAULT_AI_PROVIDER = "gemini";
 export const DEFAULT_BATCH_SIZE = 30;
 export const MIN_BATCH_SIZE = 1;

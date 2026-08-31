@@ -45,6 +45,30 @@ export async function getShopGeminiConfiguration(shop: string) {
     };
   }
 
+  if (provider === "minimax") {
+    if (!settings.encryptedMinimaxApiKey) return null;
+    return {
+      provider: "minimax" as const,
+      apiKey: decryptGeminiApiKey(settings.encryptedMinimaxApiKey),
+      model: settings.minimaxModel || "MiniMax-M3",
+      batchSize: settings.batchSize,
+      lazyLoadPageSize: settings.lazyLoadPageSize ?? 20,
+      brandName: settings.brandName ?? null,
+    };
+  }
+
+  if (provider === "groq") {
+    if (!settings.encryptedGroqApiKey) return null;
+    return {
+      provider: "groq" as const,
+      apiKey: decryptGeminiApiKey(settings.encryptedGroqApiKey),
+      model: settings.groqModel || "llama-3.3-70b-versatile",
+      batchSize: settings.batchSize,
+      lazyLoadPageSize: settings.lazyLoadPageSize ?? 20,
+      brandName: settings.brandName ?? null,
+    };
+  }
+
   // Gemini (default)
   if (!settings.encryptedGeminiApiKey) return null;
   return {

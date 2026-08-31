@@ -10,10 +10,14 @@ import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_GEMINI_MODEL,
   DEFAULT_GLM_MODEL,
+  DEFAULT_MINIMAX_MODEL,
+  DEFAULT_GROQ_MODEL,
   DEFAULT_AI_PROVIDER,
   DEFAULT_LAZY_LOAD_PAGE_SIZE,
   GEMINI_MODELS,
   GLM_MODELS,
+  MINIMAX_MODELS,
+  GROQ_MODELS,
   AI_PROVIDERS,
   MAX_BATCH_SIZE,
   MAX_LAZY_LOAD_PAGE_SIZE,
@@ -32,23 +36,35 @@ import { authenticate } from "../shopify.server";
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const settings = await prisma.shopSettings.findUnique({ where: { shop: session.shop } });
-  const provider = (settings?.aiProvider as "gemini" | "glm") || DEFAULT_AI_PROVIDER;
+  const provider = (settings?.aiProvider as "gemini" | "glm" | "minimax" | "groq") || DEFAULT_AI_PROVIDER;
   return {
     provider,
     configured: provider === "glm"
       ? Boolean(settings?.encryptedGlmApiKey)
-      : Boolean(settings?.encryptedGeminiApiKey),
+      : provider === "minimax"
+        ? Boolean(settings?.encryptedMinimaxApiKey)
+        : provider === "groq"
+          ? Boolean(settings?.encryptedGroqApiKey)
+          : Boolean(settings?.encryptedGeminiApiKey),
     model: provider === "glm"
       ? (settings?.glmModel ?? DEFAULT_GLM_MODEL)
-      : (settings?.geminiModel ?? DEFAULT_GEMINI_MODEL),
+      : provider === "minimax"
+        ? (settings?.minimaxModel ?? DEFAULT_MINIMAX_MODEL)
+        : provider === "groq"
+          ? (settings?.groqModel ?? DEFAULT_GROQ_MODEL)
+          : (settings?.geminiModel ?? DEFAULT_GEMINI_MODEL),
     batchSize: settings?.batchSize ?? DEFAULT_BATCH_SIZE,
     lazyLoadPageSize: settings?.lazyLoadPageSize ?? DEFAULT_LAZY_LOAD_PAGE_SIZE,
     brandName: settings?.brandName ?? "",
-    // Include both keys' configured state for UI
+    // Include all keys' configured state for UI
     geminiConfigured: Boolean(settings?.encryptedGeminiApiKey),
     glmConfigured: Boolean(settings?.encryptedGlmApiKey),
+    minimaxConfigured: Boolean(settings?.encryptedMinimaxApiKey),
+    groqConfigured: Boolean(settings?.encryptedGroqApiKey),
     geminiModel: settings?.geminiModel ?? DEFAULT_GEMINI_MODEL,
     glmModel: settings?.glmModel ?? DEFAULT_GLM_MODEL,
+    minimaxModel: settings?.minimaxModel ?? DEFAULT_MINIMAX_MODEL,
+    groqModel: settings?.groqModel ?? DEFAULT_GROQ_MODEL,
     updatedAt: settings?.updatedAt.toISOString() ?? null,
   };
 };
@@ -60,7 +76,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const current = await prisma.shopSettings.findUnique({ where: { shop: session.shop } });
 
   try {
-    const provider = String(form.get("provider") || "gemini") as "gemini" | "glm";
+    const provider = String(form.get("provider") || "gemini") as "gemini" | "glm" | "minimax" | "groq";
 
     if (intent === "clear") {
       if (provider === "glm") {
@@ -70,6 +86,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           update: { encryptedGlmApiKey: null },
         });
         return { ok: true, message: "GLM API key cleared" };
+      }
+      if (provider === "minimax") {
+        await prisma.shopSettings.upsert({
+          where: { shop: session.shop },
+          create: { shop: session.shop, aiProvider: "minimax", encryptedMinimaxApiKey: null },
+          update: { encryptedMinimaxApiKey: null },
+        });
+        return { ok: true, message: "MiniMax API key cleared" };
+      }
+      if (provider === "groq") {
+        await prisma.shopSettings.upsert({
+          where: { shop: session.shop },
+          create: { shop: session.shop, aiProvider: "groq", encryptedGroqApiKey: null },
+          update: { encryptedGroqApiKey: null },
+        });
+        return { ok: true, message: "Groq API key cleared" };
       }
       await prisma.shopSettings.upsert({
         where: { shop: session.shop },
@@ -96,6 +128,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           : ""
       );
       if (!apiKey) throw new Error("Enter a GLM API key");
+    } else if (provider === "minimax") {
+      apiKey = replacementKey || (
+        current?.encryptedMinimaxApiKey
+          ? decryptGeminiApiKey(current.encryptedMinimaxApiKey)
+          : ""
+      );
+      if (!apiKey) throw new Error("Enter a MiniMax API key");
+    } else if (provider === "groq") {
+      apiKey = replacementKey || (
+        current?.encryptedGroqApiKey
+          ? decryptGeminiApiKey(current.encryptedGroqApiKey)
+          : ""
+      );
+      if (!apiKey) throw new Error("Enter a Groq API key");
     } else {
       apiKey = replacementKey || (
         current?.encryptedGeminiApiKey
@@ -106,6 +152,59 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     if (intent === "test") {
+      const providerLabel = provider === "glm" ? "GLM" : provider === "minimax" ? "MiniMax" : provider === "groq" ? "Groq" : "Gemini";
+
+      // For non-Gemini providers, test with a simple chat completion call
+      // (countTranslationTokens uses the Gemini SDK which only works for Gemini)
+      if (provider === "glm" || provider === "minimax" || provider === "groq") {
+        const apiUrl = provider === "glm"
+          ? "https://api.z.ai/api/paas/v4/chat/completions"
+          : provider === "minimax"
+            ? "https://api.minimax.io/v1/chat/completions"
+            : "https://api.groq.com/openai/v1/chat/completions";
+
+        const testBody: Record<string, unknown> = {
+          model,
+          messages: [
+            { role: "system", content: "Translate to French. Return only the translation." },
+            { role: "user", content: "Hello" },
+          ],
+          temperature: 0.2,
+          max_tokens: 100,
+        };
+
+        // MiniMax M3: disable thinking for faster test
+        if (provider === "minimax" && model.toLowerCase().includes("m3")) {
+          testBody.thinking = { type: "disabled" };
+        }
+
+        const testResponse = await fetch(apiUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(testBody),
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        if (!testResponse.ok) {
+          const errorText = await testResponse.text().catch(() => testResponse.statusText);
+          throw new Error(`${providerLabel} API error ${testResponse.status}: ${errorText.slice(0, 200)}`);
+        }
+
+        const testData = await testResponse.json() as {
+          choices?: Array<{ message?: { content?: string } }>;
+          usage?: { total_tokens?: number };
+        };
+        const testTranslation = testData.choices?.[0]?.message?.content || "(empty)";
+        return {
+          ok: true,
+          message: `${providerLabel} configuration is valid. Test: "Hello" → ${testTranslation.slice(0, 60)}`,
+        };
+      }
+
+      // Gemini: use the dedicated token counting API
       const tokenCount = await countTranslationTokens(
         [{ key: "/test", source: "Hello {{ name }}" }],
         "en",
@@ -115,7 +214,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
       return {
         ok: true,
-        message: `${provider === "glm" ? "GLM" : "Gemini"} configuration is valid. Test prompt: ${tokenCount} tokens`,
+        message: `${providerLabel} configuration is valid. Test prompt: ${tokenCount} tokens`,
       };
     }
     if (intent !== "save") throw new Error("Unknown settings action");
@@ -133,6 +232,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (replacementKey) {
         updateData.encryptedGlmApiKey = encryptGeminiApiKey(replacementKey);
       }
+    } else if (provider === "minimax") {
+      updateData.minimaxModel = model;
+      if (replacementKey) {
+        updateData.encryptedMinimaxApiKey = encryptGeminiApiKey(replacementKey);
+      }
+    } else if (provider === "groq") {
+      updateData.groqModel = model;
+      if (replacementKey) {
+        updateData.encryptedGroqApiKey = encryptGeminiApiKey(replacementKey);
+      }
     } else {
       updateData.geminiModel = model;
       if (replacementKey) {
@@ -140,6 +249,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
+    const providerLabel = provider === "glm" ? "GLM" : provider === "minimax" ? "MiniMax" : provider === "groq" ? "Groq" : "Gemini";
     await prisma.shopSettings.upsert({
       where: { shop: session.shop },
       create: {
@@ -147,23 +257,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         aiProvider: provider,
         ...(provider === "glm"
           ? { encryptedGlmApiKey: encryptGeminiApiKey(apiKey), glmModel: model }
-          : { encryptedGeminiApiKey: encryptGeminiApiKey(apiKey), geminiModel: model }),
+          : provider === "minimax"
+            ? { encryptedMinimaxApiKey: encryptGeminiApiKey(apiKey), minimaxModel: model }
+            : provider === "groq"
+              ? { encryptedGroqApiKey: encryptGeminiApiKey(apiKey), groqModel: model }
+              : { encryptedGeminiApiKey: encryptGeminiApiKey(apiKey), geminiModel: model }),
         batchSize,
         lazyLoadPageSize,
         brandName: brandName || null,
       },
       update: updateData,
     });
-    return { ok: true, message: `${provider === "glm" ? "GLM" : "Gemini"} settings saved` };
+    return { ok: true, message: `${providerLabel} settings saved` };
   } catch (error) {
-    const message = error instanceof Error && [
+    const knownErrors = [
       "Enter a Gemini API key",
       "Enter a GLM API key",
+      "Enter a MiniMax API key",
+      "Enter a Groq API key",
       "Enter a Gemini model name",
       `Batch size must be between ${MIN_BATCH_SIZE} and ${MAX_BATCH_SIZE}`,
       `Page size must be between ${MIN_LAZY_LOAD_PAGE_SIZE} and ${MAX_LAZY_LOAD_PAGE_SIZE}`,
       "Unknown settings action",
-    ].includes(error.message)
+    ];
+    // For API test errors (which start with the provider name), show the real error
+    const isApiError = error instanceof Error && (
+      error.message.includes("API error") ||
+      error.message.includes("fetch failed") ||
+      error.message.includes("timeout")
+    );
+    const message = error instanceof Error && (knownErrors.includes(error.message) || isApiError)
       ? error.message
       : "Configuration could not be verified";
     return Response.json({ ok: false, message }, { status: 400 });
@@ -175,7 +298,7 @@ export default function Settings() {
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
   const formRef = useRef<HTMLFormElement>(null);
-  const [provider, setProvider] = useState<"gemini" | "glm">(data.provider);
+  const [provider, setProvider] = useState<"gemini" | "glm" | "minimax" | "groq">(data.provider);
   const [modelValue, setModelValue] = useState(data.model);
 
   useEffect(() => {
@@ -195,15 +318,23 @@ export default function Settings() {
     fetcher.submit(formData, { method: "post" });
   };
 
-  const models = provider === "glm" ? GLM_MODELS : GEMINI_MODELS;
-  const isConfigured = provider === "glm" ? data.glmConfigured : data.geminiConfigured;
-  const providerLabel = provider === "glm" ? "GLM (Z.ai)" : "Gemini (Google)";
+  const models = provider === "glm" ? GLM_MODELS : provider === "minimax" ? MINIMAX_MODELS : provider === "groq" ? GROQ_MODELS : GEMINI_MODELS;
+  const isConfigured = provider === "glm" ? data.glmConfigured : provider === "minimax" ? data.minimaxConfigured : provider === "groq" ? data.groqConfigured : data.geminiConfigured;
+  const providerLabel = provider === "glm" ? "GLM (Z.ai)" : provider === "minimax" ? "MiniMax" : provider === "groq" ? "Groq" : "Gemini (Google)";
   const apiKeyPlaceholder = provider === "glm"
     ? "Enter your Z.ai API key"
-    : "Enter your Gemini API key";
+    : provider === "minimax"
+      ? "Enter your MiniMax API key"
+      : provider === "groq"
+        ? "Enter your Groq API key"
+        : "Enter your Gemini API key";
   const apiKeyHelp = provider === "glm"
     ? "Get a free API key at https://z.ai/ — GLM-4.5-Flash is free with no daily request cap."
-    : "Get a free API key at https://aistudio.google.com/apikey — Free tier: 250 req/day.";
+    : provider === "minimax"
+      ? "Get an API key at https://platform.minimax.io/ — Paid API (no free tier). Top up your balance to use."
+      : provider === "groq"
+        ? "Get a free API key at https://console.groq.com/keys — Free tier: 14,400 req/day (8B), 1,000 req/day (70B). No credit card."
+        : "Get a free API key at https://aistudio.google.com/apikey — Free tier: 250 req/day.";
 
   return (
     <s-page heading="Settings">
@@ -229,18 +360,22 @@ export default function Settings() {
                     type="button"
                     style={TABLE_STYLES.tabButton(provider === p)}
                     onClick={() => {
-                      setProvider(p as "gemini" | "glm");
-                      setModelValue(p === "glm" ? DEFAULT_GLM_MODEL : DEFAULT_GEMINI_MODEL);
+                      setProvider(p as "gemini" | "glm" | "minimax" | "groq");
+                      setModelValue(p === "glm" ? DEFAULT_GLM_MODEL : p === "minimax" ? DEFAULT_MINIMAX_MODEL : p === "groq" ? DEFAULT_GROQ_MODEL : DEFAULT_GEMINI_MODEL);
                     }}
                   >
-                    {p === "glm" ? "GLM (Z.ai)" : "Gemini (Google)"}
+                    {p === "glm" ? "GLM (Z.ai)" : p === "minimax" ? "MiniMax" : p === "groq" ? "Groq" : "Gemini (Google)"}
                   </button>
                 ))}
               </div>
               <p style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
                 {provider === "glm"
                   ? "GLM-4.5-Flash is free with no daily request limit (1 concurrent request). Best for large translation jobs."
-                  : "Gemini 3.5 Flash is free but limited to 250 requests/day. Good for small jobs."}
+                  : provider === "minimax"
+                    ? "MiniMax M3 has 1M context, strong multilingual support. Paid API — top up balance at platform.minimax.io. 200+ RPM."
+                    : provider === "groq"
+                      ? "Groq is free, no credit card. Llama 3.3 70B: 1,000 req/day. Llama 3.1 8B: 14,400 req/day. Very fast (500-3000 tok/s)."
+                      : "Gemini 3.5 Flash is free but limited to 250 requests/day. Good for small jobs."}
               </p>
             </div>
 
@@ -267,7 +402,7 @@ export default function Settings() {
                 value={modelValue}
                 onChange={(e) => setModelValue((e.currentTarget as unknown as HTMLInputElement).value)}
                 autocomplete="off"
-                placeholder={provider === "glm" ? "e.g. glm-4.5-flash" : "e.g. gemini-3.5-flash"}
+                placeholder={provider === "glm" ? "e.g. glm-4.5-flash" : provider === "minimax" ? "e.g. MiniMax-M3" : provider === "groq" ? "e.g. llama-3.3-70b-versatile" : "e.g. gemini-3.5-flash"}
                 required
               />
               <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>

@@ -38,11 +38,15 @@ model Session {
 model ShopSettings {
   shop                  String   @id
   // AI provider settings
-  aiProvider            String   @default("gemini") // "gemini" or "glm"
+  aiProvider            String   @default("gemini") // "gemini", "glm", or "minimax"
   encryptedGeminiApiKey String?
   geminiModel           String   @default("gemini-3.5-flash")
   encryptedGlmApiKey    String?  // Z.ai (Zhipu) API key for GLM models
   glmModel              String   @default("glm-4.5-flash")
+  encryptedMinimaxApiKey String? // MiniMax API key (platform.minimax.io)
+  minimaxModel          String   @default("MiniMax-M3")
+  encryptedGroqApiKey   String?  // Groq API key (console.groq.com)
+  groqModel             String   @default("llama-3.3-70b-versatile")
   batchSize             Int      @default(30)
   lazyLoadPageSize      Int      @default(20)
   brandName             String?  // brand name to exclude from translation (e.g. "Noonchi Organic")

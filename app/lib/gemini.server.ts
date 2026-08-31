@@ -120,6 +120,34 @@ Strings to translate:
 ${JSON.stringify(items)}`;
 }
 
+/**
+ * Compact prompt for providers with low TPM limits (e.g. Groq free tier: 8K TPM).
+ * Strips verbose explanations but keeps essential rules.
+ * Saves ~400 tokens per request vs the full prompt.
+ */
+export function promptForCompact(items: TranslationItem[], sourceLocale: string, targetLocale: string, context?: TranslationContext) {
+  const sourceName = localeDisplayName(sourceLocale);
+  const targetName = localeDisplayName(targetLocale);
+
+  const brandContext = context?.brandName
+    ? `\n- Never translate brand name: "${context.brandName}"`
+    : "";
+
+  const glossaryEntries = Object.entries(context?.glossary ?? {}).slice(0, 20); // limit glossary size
+  const glossaryContext = glossaryEntries.length
+    ? `\n- Glossary: ${glossaryEntries.map(([s, t]) => `${s}=${t}`).join(", ")}`
+    : "";
+
+  const forcePrefix = context?.force
+    ? `MUST translate every string to ${targetName}. Do NOT return any string identical to source.\n`
+    : "";
+
+  return `${forcePrefix}Translate from ${sourceName} to ${targetName} for a Shopify store.${brandContext}${glossaryContext}
+Rules: Translate everything. Preserve {{ }}, {% %}, %{placeholder} tokens. Keep HTML tags, translate text inside. Keep keys unchanged. Adapt tone for e-commerce.
+JSON to translate:
+${JSON.stringify(items)}`;
+}
+
 export function localeDisplayName(locale: string): string {
   try {
     const display = new Intl.DisplayNames(["en"], { type: "language" });
@@ -146,9 +174,10 @@ export async function translateBatch(
   }
 
   const ai = new GoogleGenAI({ apiKey });
+  const resolvedModel = resolveModel(model);
   const response = await Promise.race([
     withRetry(() => ai.models.generateContent({
-      model,
+      model: resolvedModel,
       contents: promptFor(items, sourceLocale, targetLocale, context),
       config: {
         responseMimeType: "application/json",
@@ -157,7 +186,7 @@ export async function translateBatch(
       },
     })),
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Gemini API timeout after 120s")), 120_000),
+      setTimeout(() => reject(new Error("Gemini API timeout after 180s")), 180_000),
     ),
   ]);
   if (!response.text) throw new Error("Gemini returned an empty response");
@@ -240,7 +269,31 @@ export function isRetryableGeminiError(error: unknown) {
   // Network errors (fetch failed, socket closed, etc.)
   if (error instanceof TypeError && error.message.includes("fetch failed")) return true;
   if (error instanceof Error && error.message.includes("Gemini API timeout")) return true;
+  // Model not found / deprecated — NOT retryable with same model
+  if (error instanceof ApiError && error.status === 404) return false;
   return false;
+}
+
+// ─── Model fallback ────────────────────────────────────────────────────────
+// Map deprecated/invalid model names to current ones
+const MODEL_FALLBACKS: Record<string, string> = {
+  "gemini-2.5-flash": "gemini-3.5-flash",
+  "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
+  "gemini-2.0-flash": "gemini-3.5-flash",
+  "gemini-2.0-flash-lite": "gemini-3.5-flash-lite",
+  "gemini-2-flash": "gemini-3.5-flash",
+  "gemini-flash-latest": "gemini-3.5-flash",
+  "gemini-flash-lite-latest": "gemini-3.5-flash-lite",
+  "gemini-1.5-flash": "gemini-3.5-flash",
+  "gemini-1.5-flash-latest": "gemini-3.5-flash",
+};
+
+function resolveModel(model: string): string {
+  if (MODEL_FALLBACKS[model]) {
+    console.log(`[modelFallback] ${model} → ${MODEL_FALLBACKS[model]}`);
+    return MODEL_FALLBACKS[model];
+  }
+  return model;
 }
 
 // ─── Rate limiter for free tier ────────────────────────────────────────────
@@ -324,7 +377,7 @@ export function buildGlossary(
  * Pass provider = "gemini" or "glm".
  */
 export async function translateBatchProvider(
-  provider: "gemini" | "glm",
+  provider: "gemini" | "glm" | "minimax" | "groq",
   items: TranslationItem[],
   sourceLocale: string,
   targetLocale: string,
@@ -336,16 +389,32 @@ export async function translateBatchProvider(
     const { translateBatchGlm } = await import("./glm.server");
     return translateBatchGlm(items, sourceLocale, targetLocale, apiKey, model, context);
   }
+  if (provider === "minimax") {
+    const { translateBatchMinimax } = await import("./minimax.server");
+    return translateBatchMinimax(items, sourceLocale, targetLocale, apiKey, model, context);
+  }
+  if (provider === "groq") {
+    const { translateBatchGroq } = await import("./groq.server");
+    return translateBatchGroq(items, sourceLocale, targetLocale, apiKey, model, context);
+  }
   return translateBatch(items, sourceLocale, targetLocale, apiKey, model, context);
 }
 
 /**
  * Unified isRetryable check across providers.
  */
-export async function isRetryableError(provider: "gemini" | "glm", error: unknown) {
+export async function isRetryableError(provider: "gemini" | "glm" | "minimax" | "groq", error: unknown) {
   if (provider === "glm") {
     const { isRetryableGlmError } = await import("./glm.server");
     return isRetryableGlmError(error);
+  }
+  if (provider === "minimax") {
+    const { isRetryableMinimaxError } = await import("./minimax.server");
+    return isRetryableMinimaxError(error);
+  }
+  if (provider === "groq") {
+    const { isRetryableGroqError } = await import("./groq.server");
+    return isRetryableGroqError(error);
   }
   return isRetryableGeminiError(error);
 }
