@@ -1,11 +1,26 @@
 export const GEMINI_MODELS = [
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.0-flash-preview",
+  "gemini-3.1-flash-lite-preview",
   "gemini-2.5-flash-lite",
   "gemini-2.5-flash",
-  "gemini-flash-lite-latest",
-  "gemini-flash-latest",
 ] as const;
 
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+export const GLM_MODELS = [
+  "glm-4.5-flash",
+  "glm-4.7-flash",
+  "glm-4.5-air",
+  "glm-4.5",
+  "glm-4.7",
+  "glm-5.2",
+] as const;
+
+export const AI_PROVIDERS = ["gemini", "glm"] as const;
+
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
+export const DEFAULT_GLM_MODEL = "glm-4.5-flash";
+export const DEFAULT_AI_PROVIDER = "gemini";
 export const DEFAULT_BATCH_SIZE = 30;
 export const MIN_BATCH_SIZE = 1;
 export const MAX_BATCH_SIZE = 50;

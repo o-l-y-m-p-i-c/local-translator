@@ -37,8 +37,12 @@ model Session {
 
 model ShopSettings {
   shop                  String   @id
+  // AI provider settings
+  aiProvider            String   @default("gemini") // "gemini" or "glm"
   encryptedGeminiApiKey String?
-  geminiModel           String   @default("gemini-2.5-flash")
+  geminiModel           String   @default("gemini-3.5-flash")
+  encryptedGlmApiKey    String?  // Z.ai (Zhipu) API key for GLM models
+  glmModel              String   @default("glm-4.5-flash")
   batchSize             Int      @default(30)
   lazyLoadPageSize      Int      @default(20)
   brandName             String?  // brand name to exclude from translation (e.g. "Noonchi Organic")
@@ -114,6 +118,7 @@ model ContentTranslationJob {
   currentResourceType  String?  // which resource type is currently being processed (for full jobs)
   currentResourceCount Int      @default(0) // how many resources processed in current type
   totalResourceCount   Int      @default(0) // total resources found in current type
+  statusMessage        String?  // human-readable detail: "Translating via Gemini...", "Rate limited, waiting 30s...", etc.
   model                String?
   error                String?
   createdAt            DateTime @default(now())

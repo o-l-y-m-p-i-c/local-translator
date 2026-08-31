@@ -10,7 +10,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { HighlightText } from "../components/HighlightText";
 import { TABLE_STYLES } from "../components/tableStyles";
 import prisma from "../db.server";
-import { isRetryableGeminiError, translateBatch } from "../lib/gemini.server";
+import { isRetryableError, translateBatchProvider } from "../lib/gemini.server";
 import { getShopGeminiConfiguration } from "../lib/gemini-settings.server";
 import {
   computeStatuses,
@@ -253,7 +253,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (intent === "translate") {
         const configuration = await getShopGeminiConfiguration(session.shop);
         if (!configuration) throw new Error("Configure a Gemini API key in Settings first");
-        const result = await translateBatch(
+        const result = await translateBatchProvider(
+          configuration.provider,
           [{ key, source: source[key] }],
           workspace.sourceLocale,
           targetLocale,
@@ -285,7 +286,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       for (let i = 0; i < keysToTranslate.length; i += BATCH) {
         const batch = keysToTranslate.slice(i, i + BATCH);
         const items = batch.map((key) => ({ key, source: source[key] }));
-        const result = await translateBatch(
+        const result = await translateBatchProvider(
+          configuration.provider,
           items,
           workspace.sourceLocale,
           targetLocale,
@@ -403,7 +405,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       try {
-        const result = await translateBatch(
+        const result = await translateBatchProvider(
+          configuration.provider,
           batchKeys.map((key) => ({ key, source: source[key] })),
           workspace.sourceLocale,
           targetLocale,
@@ -445,9 +448,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           job: jobSummary(updatedJob),
         };
       } catch (error) {
-        const retryable = isRetryableGeminiError(error);
+        const retryable = await isRetryableError(configuration.provider, error);
         const errorMessage = retryable
-          ? "Gemini is rate limited or temporarily unavailable. Continue the job to retry this batch."
+          ? "AI provider is rate limited or temporarily unavailable. Continue the job to retry this batch."
           : error instanceof Error && (
               error.message.startsWith("Gemini changed protected tokens") ||
               error.message.startsWith("Gemini omitted") ||

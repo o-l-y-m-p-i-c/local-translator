@@ -50,7 +50,7 @@ const RESOURCE_TYPE_LABELS: Record<string, string> = {
   THEME: "theme content (UI labels, section settings, template text, app embeds)",
 };
 
-function promptFor(items: TranslationItem[], sourceLocale: string, targetLocale: string, context?: TranslationContext) {
+export function promptFor(items: TranslationItem[], sourceLocale: string, targetLocale: string, context?: TranslationContext) {
   const sourceName = localeDisplayName(sourceLocale);
   const targetName = localeDisplayName(targetLocale);
 
@@ -120,7 +120,7 @@ Strings to translate:
 ${JSON.stringify(items)}`;
 }
 
-function localeDisplayName(locale: string): string {
+export function localeDisplayName(locale: string): string {
   try {
     const display = new Intl.DisplayNames(["en"], { type: "language" });
     const code = locale.replace(/\.default$/, "").replace(/\.schema$/, "");
@@ -147,7 +147,7 @@ export async function translateBatch(
 
   const ai = new GoogleGenAI({ apiKey });
   const response = await Promise.race([
-    ai.models.generateContent({
+    withRetry(() => ai.models.generateContent({
       model,
       contents: promptFor(items, sourceLocale, targetLocale, context),
       config: {
@@ -155,7 +155,7 @@ export async function translateBatch(
         responseJsonSchema: RESPONSE_SCHEMA,
         temperature: 0.2,
       },
-    }),
+    })),
     new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error("Gemini API timeout after 120s")), 120_000),
     ),
@@ -173,12 +173,18 @@ export async function translateBatch(
     if (source === undefined || result.key in translations) continue;
     const invalid = validatePlaceholders(source, result.translation);
     if (invalid.length) {
-      throw new Error(`Gemini changed protected tokens for ${result.key}: ${invalid.join(", ")}`);
+      // Skip this key instead of failing the whole batch — keep the source as-is
+      console.log(`[translateBatch] Skipping key "${result.key}" — Gemini changed protected tokens: ${invalid.join(", ")}`);
+      translations[result.key] = source; // fall back to source (unchanged)
+      continue;
     }
     translations[result.key] = result.translation;
   }
   const missing = items.filter(({ key }) => !(key in translations));
-  if (missing.length) throw new Error(`Gemini omitted ${missing.length} translation(s)`);
+  if (missing.length) {
+    // Don't throw — return what we have. The caller can retry missing keys.
+    console.log(`[translateBatch] Gemini omitted ${missing.length} translation(s), returning partial results`);
+  }
 
   // Post-translation check: detect strings that Gemini returned UNCHANGED (not translated).
   // Retry those with force mode to aggressively force translation.
@@ -229,7 +235,51 @@ export async function countTranslationTokens(
 }
 
 export function isRetryableGeminiError(error: unknown) {
-  return error instanceof ApiError && (error.status === 429 || error.status >= 500);
+  // Rate limit errors
+  if (error instanceof ApiError && (error.status === 429 || error.status >= 500)) return true;
+  // Network errors (fetch failed, socket closed, etc.)
+  if (error instanceof TypeError && error.message.includes("fetch failed")) return true;
+  if (error instanceof Error && error.message.includes("Gemini API timeout")) return true;
+  return false;
+}
+
+// ─── Rate limiter for free tier ────────────────────────────────────────────
+// Free tier: 10 RPM (Gemini 2.5/3.5 Flash) or 15 RPM (Flash-Lite).
+// We use 6s between requests = 10 RPM to be safe across all free models.
+let lastRequestTime = 0;
+const FREE_TIER_MIN_INTERVAL_MS = 6000; // 10 RPM
+
+async function enforceRateLimit() {
+  const now = Date.now();
+  const elapsed = now - lastRequestTime;
+  if (elapsed < FREE_TIER_MIN_INTERVAL_MS) {
+    const waitMs = FREE_TIER_MIN_INTERVAL_MS - elapsed;
+    console.log(`[rateLimit] Waiting ${waitMs}ms to stay within free tier (10 RPM)...`);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+  lastRequestTime = Date.now();
+}
+
+/**
+ * Retry a function with exponential backoff for retryable Gemini errors.
+ * Waits: 5s, 10s, 20s, 40s, 60s between attempts.
+ */
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 4): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await enforceRateLimit();
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxRetries || !isRetryableGeminiError(error)) throw error;
+      const delay = Math.min(5000 * Math.pow(2, attempt), 60000);
+      const errorDetail = error instanceof ApiError ? `status ${error.status}` : error instanceof Error ? error.message : String(error);
+      console.log(`[translateBatch] Retryable error (${errorDetail}), waiting ${delay / 1000}s before retry ${attempt + 1}/${maxRetries}...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
 }
 
 /**
@@ -267,4 +317,35 @@ export function buildGlossary(
   }
 
   return glossary;
+}
+
+/**
+ * Unified translate function that dispatches to the correct provider.
+ * Pass provider = "gemini" or "glm".
+ */
+export async function translateBatchProvider(
+  provider: "gemini" | "glm",
+  items: TranslationItem[],
+  sourceLocale: string,
+  targetLocale: string,
+  apiKey: string,
+  model: string,
+  context?: TranslationContext,
+): Promise<{ translations: Record<string, string>; usage: GeminiUsage }> {
+  if (provider === "glm") {
+    const { translateBatchGlm } = await import("./glm.server");
+    return translateBatchGlm(items, sourceLocale, targetLocale, apiKey, model, context);
+  }
+  return translateBatch(items, sourceLocale, targetLocale, apiKey, model, context);
+}
+
+/**
+ * Unified isRetryable check across providers.
+ */
+export async function isRetryableError(provider: "gemini" | "glm", error: unknown) {
+  if (provider === "glm") {
+    const { isRetryableGlmError } = await import("./glm.server");
+    return isRetryableGlmError(error);
+  }
+  return isRetryableGeminiError(error);
 }

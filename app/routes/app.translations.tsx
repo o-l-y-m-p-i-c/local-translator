@@ -12,12 +12,12 @@ import { TABLE_STYLES } from "../components/tableStyles";
 import { authenticate } from "../shopify.server";
 
 async function loadServerModules() {
-  const [{ translateBatch, buildGlossary }, { getShopGeminiConfiguration }, translationsLib] = await Promise.all([
+  const [{ translateBatchProvider, buildGlossary }, { getShopGeminiConfiguration }, translationsLib] = await Promise.all([
     import("../lib/gemini.server"),
     import("../lib/gemini-settings.server"),
     import("../lib/shopify-translations.server"),
   ]);
-  return { translateBatch, buildGlossary, getShopGeminiConfiguration, translationsLib };
+  return { translateBatchProvider, buildGlossary, getShopGeminiConfiguration, translationsLib };
 }
 
 const RESOURCE_CATEGORIES: Array<{ label: string; types: Array<{ value: string; label: string }> }> = [
@@ -106,7 +106,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const resourceType = String(form.get("resourceType") || "");
   const resourceId = String(form.get("resourceId") || "");
 
-  const { translateBatch, buildGlossary, getShopGeminiConfiguration, translationsLib } = await loadServerModules();
+  const { translateBatchProvider, buildGlossary, getShopGeminiConfiguration, translationsLib } = await loadServerModules();
 
   try {
     if (intent === "translateAll") {
@@ -136,7 +136,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               glossary: Object.keys(glossary).length ? glossary : undefined,
               brandName: configuration.brandName || undefined,
             };
-            const geminiResult = await translateBatch(items, "en", targetLocale, configuration.apiKey, configuration.model, context);
+            const geminiResult = await translateBatchProvider(configuration.provider, items, "en", targetLocale, configuration.apiKey, configuration.model, context);
             const translations = translatable.map((c) => ({
               key: c.key,
               value: geminiResult.translations[c.key] || "",
@@ -186,7 +186,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (!keys.length) throw new Error("No translatable fields (handle fields are skipped)");
 
       const items = keys.map((key, i) => ({ key, source: sources[i] || "" }));
-      const result = await translateBatch(
+      const result = await translateBatchProvider(
+        configuration.provider,
         items,
         "en",
         targetLocale,

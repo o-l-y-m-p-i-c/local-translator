@@ -29,8 +29,26 @@ export function decryptGeminiApiKey(payload: string) {
 
 export async function getShopGeminiConfiguration(shop: string) {
   const settings = await prisma.shopSettings.findUnique({ where: { shop } });
-  if (!settings?.encryptedGeminiApiKey) return null;
+  if (!settings) return null;
+
+  const provider = settings.aiProvider || "gemini";
+
+  if (provider === "glm") {
+    if (!settings.encryptedGlmApiKey) return null;
+    return {
+      provider: "glm" as const,
+      apiKey: decryptGeminiApiKey(settings.encryptedGlmApiKey),
+      model: settings.glmModel || "glm-4.5-flash",
+      batchSize: settings.batchSize,
+      lazyLoadPageSize: settings.lazyLoadPageSize ?? 20,
+      brandName: settings.brandName ?? null,
+    };
+  }
+
+  // Gemini (default)
+  if (!settings.encryptedGeminiApiKey) return null;
   return {
+    provider: "gemini" as const,
     apiKey: decryptGeminiApiKey(settings.encryptedGeminiApiKey),
     model: parseGeminiModel(settings.geminiModel),
     batchSize: settings.batchSize,
